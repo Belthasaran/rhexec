@@ -1,6 +1,6 @@
 # rhexec
 
-Proof-of-concept **SNES execution-state** capture and playback. Standalone from the RHPlay Electron app: capture an unpatched ROM in Mesen 2 as `.rhstate1`, then materialize Technique A (boot-restore SFC), B (sd2snes YAML), or C (Mesen WRAM apply).
+Proof-of-concept **SNES execution-state** capture and playback. Standalone from the RHPlay Electron app: capture an unpatched ROM in Mesen 2 as portable `.rhstate1`, then materialize Technique A (boot-restore SFC), B (sd2snes YAML), or C (atomic Mesen `loadSavestate`).
 
 ## Setup
 

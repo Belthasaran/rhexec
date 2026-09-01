@@ -6,3 +6,4 @@ dump-*/
 tmp/
 .DS_Store
 *.sfc
+*.rhstate1

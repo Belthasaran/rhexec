@@ -8,7 +8,9 @@ Environment: `MESEN_PATH` (Mesen 2 binary, default `Mesen`), `MESEN_ARGS` (extra
 
 ### rhcap1-mesen
 
-Capture in-level SNES state with Mesen 2 → `.rhstate1`.
+Capture in-level SNES state with Mesen 2 → portable `.rhstate1`.
+
+On in-level (`$0100=$14`, `$71=0`) a one-shot `cpuExec` writes a temp Mesen `.mss`, which Node maps into hardware maps/sections and deletes.
 
 ```bash
 npm run rhcap1-mesen -- --rom <file.sfc|file.smc> --mode auto|manual [--out path] [--zeros raw|rle0] [--timeout-sec N]
@@ -22,7 +24,7 @@ npm run rhcap1-mesen -- --rom <file.sfc|file.smc> --mode auto|manual [--out path
 
 ### rhboot1-sfc
 
-Technique A: new SFC with reset trampoline + WRAM payload. Does not patch `$05D89B`/`$05DCDD`.
+Technique A: new SFC with reset trampoline + WRAM payload. Does not patch `$05D89B`/`$05DCDD`. WRAM+reset stub only — not a full PPU/SPC restore.
 
 ```bash
 npm run rhboot1-sfc -- --rom <sfc> --state <rhstate1> [--out file-boot.sfc] [--level HEX] [--ow-submap N --ow-x N --ow-y N]
@@ -42,7 +44,7 @@ npm run rhcheat1-yml -- --rom <sfc> --state <rhstate1> [--out basename.yml] [--l
 
 ### rhlaunch1-mesen
 
-Technique C: launch original ROM in Mesen and apply mutated WRAM from `.rhstate1`.
+Technique C: launch the original ROM in Mesen and restore CPU/PPU/SPC/WRAM from `.rhstate1` in **one** `cpuExec` (`loadSavestate` of a throwaway `.mss`). `--out` is not accepted (use `rhboot1-sfc`).
 
 ```bash
 npm run rhlaunch1-mesen -- --rom <sfc> --state <rhstate1> [--level HEX] [--ow-submap N --ow-x N --ow-y N]

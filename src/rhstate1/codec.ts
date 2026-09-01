@@ -1,6 +1,6 @@
 import { decode, encode } from '@msgpack/msgpack';
 import { maybeDecode, maybeEncode } from './rle0.ts';
-import { RHSTATE1_MAGIC, RHSTATE1_VERSION, type RhState1, type RhState1Section, type SectionEncoding } from './types.ts';
+import { RHSTATE1_MAGIC, RHSTATE1_VERSION, normalizeCpu, type RhState1, type RhState1Section, type SectionEncoding } from './types.ts';
 
 function assertUint8(data: unknown, label: string): Uint8Array {
   if (data instanceof Uint8Array) return data;
@@ -53,7 +53,7 @@ export function decodeRhState1(file: Uint8Array): RhState1 {
     profile: (doc.profile as RhState1['profile']) || 'in_level',
     rom: doc.rom as RhState1['rom'],
     host: doc.host as RhState1['host'],
-    cpu: doc.cpu as RhState1['cpu'],
+    cpu: normalizeCpu(doc.cpu as RhState1['cpu']),
     trigger: doc.trigger as RhState1['trigger'],
     sections,
   } as RhState1;
