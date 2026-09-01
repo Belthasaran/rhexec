@@ -1,0 +1,7 @@
+node_modules/
+*.rhstate1
+*.yml
+*-boot.sfc
+dump-*/
+tmp/
+.DS_Store

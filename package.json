@@ -1,0 +1,32 @@
+{
+  "name": "rhexec",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Proof-of-concept SNES execution-state capture and playback CLIs (RHSTATE1)",
+  "type": "module",
+  "bin": {
+    "rhcap1-mesen": "./src/cli/rhcap1-mesen.ts",
+    "rhboot1-sfc": "./src/cli/rhboot1-sfc.ts",
+    "rhcheat1-yml": "./src/cli/rhcheat1-yml.ts",
+    "rhlaunch1-mesen": "./src/cli/rhlaunch1-mesen.ts"
+  },
+  "scripts": {
+    "rhcap1-mesen": "node --import tsx src/cli/rhcap1-mesen.ts",
+    "rhboot1-sfc": "node --import tsx src/cli/rhboot1-sfc.ts",
+    "rhcheat1-yml": "node --import tsx src/cli/rhcheat1-yml.ts",
+    "rhlaunch1-mesen": "node --import tsx src/cli/rhlaunch1-mesen.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "help": "node --import tsx src/cli/rhcap1-mesen.ts --help"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
