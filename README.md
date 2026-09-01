@@ -33,4 +33,4 @@ Live Mesen capture is skipped unless `MESEN_PATH` points at a real binary.
 
 ## Why this exists
 
-`4lvno` hijacks SMW’s level loader. Some hacks checksum those sites and crash. These tools record state after a **normal** in-level entry and play it back without patching `$05D89B` / `$05DCDD`.
+`4lvno` hijacks SMW’s level loader. Some hacks have customized load procs and crash. These tools record state after a **normal** in-level entry and play it back without patching `$05D89B` / `$05DCDD`.
