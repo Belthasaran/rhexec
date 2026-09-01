@@ -5,3 +5,4 @@ node_modules/
 dump-*/
 tmp/
 .DS_Store
+*.sfc
