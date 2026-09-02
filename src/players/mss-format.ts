@@ -160,6 +160,13 @@ export function mssAddU32(mss: MssFile, key: string, v: number): void {
   mssAdd(mss, key, wrU32le(v));
 }
 
+/** Signed 32-bit. Mesen skips Binary values shorter than sizeof(T). */
+export function mssAddI32(mss: MssFile, key: string, v: number): void {
+  const b = Buffer.alloc(4);
+  b.writeInt32LE(Number(v) | 0, 0);
+  mssAdd(mss, key, b);
+}
+
 export function mssAddU64(mss: MssFile, key: string, v: number): void {
   const b = Buffer.alloc(8);
   b.writeBigUInt64LE(BigInt(Math.max(0, Math.floor(Number(v) || 0))), 0);
@@ -173,8 +180,19 @@ export function mssU8(mss: MssFile, key: string, fallback = 0): number {
 
 export function mssU16(mss: MssFile, key: string, fallback = 0): number {
   const d = mss.index.get(key);
-  if (!d || d.length < 2) return fallback;
+  if (!d || d.length < 1) return fallback;
+  if (d.length === 1) return d[0]!;
   return d[0]! | (d[1]! << 8);
+}
+
+/** Read a little-endian integer of 1/2/4 bytes (old synths used the wrong width). */
+export function mssI32(mss: MssFile, key: string, fallback = 0): number {
+  const d = mss.index.get(key);
+  if (!d || d.length < 1) return fallback;
+  if (d.length >= 4) return Buffer.from(d.subarray(0, 4)).readInt32LE(0);
+  if (d.length >= 2) return Buffer.from(d.subarray(0, 2)).readInt16LE(0);
+  const b = d[0]!;
+  return b > 127 ? b - 256 : b;
 }
 
 export function mssS16(mss: MssFile, key: string, fallback = 0): number {

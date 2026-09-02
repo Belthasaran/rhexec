@@ -64,8 +64,12 @@ test('portable cpu/fillram/ppu/dma/spc/dsp_voices map to Mesen keys', () => {
       env_volume: 0x7f, prev_calculated_env: 1, interpolation_pos: 2, env_mode: 3,
       brr_address: 0x200, brr_offset: 1, voice_bit: 1, key_on_delay: 0, env_out: 10, buffer_pos: 0,
     }],
+    dsp_state: { key_on: 0x0f, new_key_on: 0x0f, every_other_sample: 1, echo_enabled: 1 },
   });
   st.dma!.channels[0] = { ...emptyDmaChannel(), src_address: 0x4300, src_bank: 0x7e, dest: 0x18, transfer_mode: 1 };
+  const dspRegs = new Uint8Array(128);
+  dspRegs[0x4c] = 0x0f;
+  st.sections.push({ id: 'dsp', bus: 0, encoding: 'raw', data: dspRegs });
 
   const mss = portableToMss(st, 'game.sfc');
   assert.equal(mssU16(mss, 'cpu.a'), 0x1111);
@@ -83,6 +87,13 @@ test('portable cpu/fillram/ppu/dma/spc/dsp_voices map to Mesen keys', () => {
   assert.equal(mssU16(mss, 'ppu.layers[0].hscroll'), 0x12);
   assert.ok(mssU64(mss, 'memoryManager.masterClock') >= 1000);
   assert.equal(mssU16(mss, 'spc.dsp.voices[0].envVolume'), 0x7f);
+  assert.equal(mssGet(mss, 'spc.dsp.voices[0].envVolume')!.length, 4);
+  assert.equal(mssGet(mss, 'spc.dsp.voices[0].envMode')!.length, 4);
+  assert.equal(mssGet(mss, 'spc.dsp.voices[0].brrOffset')!.length, 2);
+  assert.equal(mssGet(mss, 'spc.dsp.voices[0].sampleBuffer')!.length, 24);
+  assert.equal(mssU8(mss, 'spc.writeEnabled'), 1);
+  assert.equal(mssU8(mss, 'spc.dsp.keyOn'), 0x0f);
+  assert.deepEqual(Array.from(mssGet(mss, 'spc.dsp.externalRegs')!.subarray(0x4c, 0x4d)), [0x0f]);
   const wr = mssBytes(mss, 'memoryManager.workRam', 0x20000);
   assert.ok(wr);
   assert.equal(wr[0x13bf], 0x05);
@@ -105,6 +116,8 @@ test('portable cpu/fillram/ppu/dma/spc/dsp_voices map to Mesen keys', () => {
   assert.equal(back.ppu?.layers?.[0]?.tilemap_address, 0x4000);
   assert.equal(back.ppu?.layers?.[0]?.hscroll, 0x12);
   assert.equal(back.dsp_voices?.[0]?.env_volume, 0x7f);
+  assert.equal(back.dsp_voices?.[0]?.env_mode, 3);
+  assert.equal(back.dsp_state?.key_on, 0x0f);
   const fil = reconstructFillram(back);
   assert.equal(fil[0x2100] & 0x80, 0x80);
   assert.equal(fil[0x4200] & 0x80, 0x80);
@@ -228,6 +241,30 @@ test('setState uses Mesen bools and clock keys', () => {
   const lua = setStateToLua(map);
   assert.match(lua, /\["cpu.emulationMode"\] = false/);
   assert.match(lua, /\["internalRegisters.enableNmi"\] = true/);
+});
+
+test('old 2-byte DSP voice fields rewrite as Mesen int32/uint16', () => {
+  const mss = createEmptyMss('game.sfc');
+  mssAddU16(mss, 'spc.dsp.voices[0].envVolume', 0x7f0);
+  mssAddU8(mss, 'spc.dsp.voices[0].envMode', 2);
+  mssAddU8(mss, 'spc.dsp.voices[0].brrOffset', 9);
+  mssAdd(mss, 'spc.dsp.voices[0].sampleBuffer', Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
+  mssAddU8(mss, 'spc.dsp.voices[0].envOut', 3);
+  const back = mssToPortable(mss, {
+    rom: { sha1: '00', size: 0x8000, headered: false, mapping: 'lorom', sa1: false },
+    host: { emulator: 'test', mode: 'manual' },
+    profile: 'in_level',
+    trigger: { game_mode: 0x14, pc: 0x808000, frame: 1 },
+  });
+  assert.equal(back.dsp_voices?.[0]?.env_volume, 0x7f0);
+  assert.equal(back.dsp_voices?.[0]?.env_mode, 2);
+  assert.equal(back.dsp_voices?.[0]?.brr_offset, 9);
+  const synth = portableToMss(back, 'game.sfc');
+  assert.equal(mssGet(synth, 'spc.dsp.voices[0].envVolume')!.length, 4);
+  assert.equal(mssGet(synth, 'spc.dsp.voices[0].envMode')!.length, 4);
+  assert.equal(mssGet(synth, 'spc.dsp.voices[0].brrOffset')!.length, 2);
+  assert.equal(mssGet(synth, 'spc.dsp.voices[0].sampleBuffer')!.length, 24);
+  assert.equal(mssU8(synth, 'spc.writeEnabled'), 1);
 });
 
 test('rhlaunch1-mesen rejects --out (use rhboot1-sfc)', () => {

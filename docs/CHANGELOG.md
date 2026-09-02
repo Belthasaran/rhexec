@@ -1,5 +1,6 @@
 # Changelog
 
+- **0.2.4:** Mesen launch wrote DSP voice envelopes as u16/`envMode` as u8. Serializer skips values shorter than the C++ type (`int32` env, `enum` mode, `uint16` brrOffset, `int16[12]` sampleBuffer), so voices stayed at Release/volume 0 — no music, and the APU handshake can freeze on overworld return. Synth now uses the real widths, copies DSP `externalRegs`, restores mixer latches + SPC `writeEnabled`/ports. Existing `.rhstate1` voice numbers still apply (no recapture required for the size bug).
 - **0.2.3:** `normalizeCpu` no longer turns native-mode `e=0` into emulation mode (`0 || 1`). That left the 5A22 in 6502 mode at an in-level PC — frozen picture, dead APU handshake. Existing dumps with `e=1` and a non-zero K are repaired on load.
 - **0.2.2:** Mesen launch: match Serializer key casing (`tilemapAddress`, `srcAddress`, `hscroll`, …), restore master/H clocks, and `emu.setState` + `resetAccessCounters` after load so HDMA/NMI run and uninit-read floods stop. Recapture `.rhstate1` (old files dropped PPU layer / DMA channel fields).
 - **0.2.1:** Capture Lua: coerce Mesen `getState` booleans (fix `math.floor` crash), one-shot `cpuExec` so a Lua error cannot run on every instruction, defer fallback RAM dumps to `startFrame`, `emu.stop` instead of debugger `breakExecution`.

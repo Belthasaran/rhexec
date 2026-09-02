@@ -3,6 +3,7 @@ import {
   encodeMss,
   mssAdd,
   mssAddBool,
+  mssAddI32,
   mssAddS16,
   mssAddU8,
   mssAddU16,
@@ -10,6 +11,7 @@ import {
   mssAddU64,
   mssBytes,
   mssGet,
+  mssI32,
   mssU8,
   mssU16,
   mssU32,
@@ -24,6 +26,7 @@ import {
   type Cpu5A22,
   type DmaChannel,
   type DmaState,
+  type DspMixer,
   type DspVoice,
   type InternalRegs,
   type PpuLayer,
@@ -40,6 +43,8 @@ const CGRAM = 512;
 const OAM = 544;
 const ARAM = 0x10000;
 const DSP = 128;
+const DSP_SAMPLE_BUF = 24;
+const DSP_ECHO_HIST = 32;
 const FILLRAM = 0x8000;
 const SA1_IRAM = 0x800;
 const STOP_WAIT = 2;
@@ -447,7 +452,12 @@ function readSpc(mss: MssFile): Spc700 {
     timers_enabled: mssU8(mss, 'spc.timersEnabled'),
     cpu_regs: [0, 1, 2, 3].map((i) => mssU8(mss, `spc.cpuRegs[${i}]`)),
     output_reg: [0, 1, 2, 3].map((i) => mssU8(mss, `spc.outputReg[${i}]`)),
+    ram_reg: [0, 1].map((i) => mssU8(mss, `spc.ramReg[${i}]`)),
     cycle: u64keys(mss, ['spc.cycle']) || undefined,
+    write_enabled: mssGet(mss, 'spc.writeEnabled') ? mssU8(mss, 'spc.writeEnabled') : undefined,
+    timers_disabled: mssGet(mss, 'spc.timersDisabled') ? mssU8(mss, 'spc.timersDisabled') : undefined,
+    internal_speed: mssGet(mss, 'spc.internalSpeed') ? mssU8(mss, 'spc.internalSpeed') : undefined,
+    external_speed: mssGet(mss, 'spc.externalSpeed') ? mssU8(mss, 'spc.externalSpeed') : undefined,
     timers: hasTimers ? timers : undefined,
   };
 }
@@ -462,10 +472,112 @@ function writeSpc(mss: MssFile, spc: Spc700): void {
   if (spc.dsp_reg != null) mssAddU8(mss, 'spc.dspReg', spc.dsp_reg);
   if (spc.rom_enabled != null) mssAddBool(mss, 'spc.romEnabled', spc.rom_enabled);
   if (spc.timers_enabled != null) mssAddBool(mss, 'spc.timersEnabled', spc.timers_enabled);
+  mssAddBool(mss, 'spc.writeEnabled', spc.write_enabled ?? 1);
+  mssAddBool(mss, 'spc.timersDisabled', spc.timers_disabled ?? 0);
+  if (spc.internal_speed != null) mssAddU8(mss, 'spc.internalSpeed', spc.internal_speed);
+  if (spc.external_speed != null) mssAddU8(mss, 'spc.externalSpeed', spc.external_speed);
+  mssAddBool(mss, 'spc.enabled', 1);
   (spc.cpu_regs ?? []).forEach((v, i) => mssAddU8(mss, `spc.cpuRegs[${i}]`, v));
   (spc.output_reg ?? []).forEach((v, i) => mssAddU8(mss, `spc.outputReg[${i}]`, v));
+  (spc.ram_reg ?? []).forEach((v, i) => mssAddU8(mss, `spc.ramReg[${i}]`, v));
   if (spc.cycle != null) mssAddU64(mss, 'spc.cycle', spc.cycle);
   (spc.timers ?? []).forEach((t, i) => writeSpcTimer(mss, `spc.timer${i}.`, t));
+}
+
+function i32Pair(mss: MssFile, key: string): number[] | undefined {
+  const d = mssGet(mss, key);
+  if (!d || d.length < 8) return undefined;
+  return [
+    Buffer.from(d.subarray(0, 4)).readInt32LE(0),
+    Buffer.from(d.subarray(4, 8)).readInt32LE(0),
+  ];
+}
+
+function writeI32Pair(mss: MssFile, key: string, pair: number[] | undefined): void {
+  if (!pair || pair.length < 2) return;
+  const b = Buffer.alloc(8);
+  b.writeInt32LE(pair[0]! | 0, 0);
+  b.writeInt32LE(pair[1]! | 0, 4);
+  mssAdd(mss, key, b);
+}
+
+function readDspState(mss: MssFile): DspMixer | undefined {
+  const p = 'spc.dsp.';
+  if (!mssGet(mss, `${p}keyOn`) && !mssGet(mss, `${p}noiseLfsr`) && !mssGet(mss, `${p}counter`)) {
+    return undefined;
+  }
+  return {
+    noise_lfsr: mssI32(mss, `${p}noiseLfsr`),
+    counter: mssU16(mss, `${p}counter`),
+    step: mssU8(mss, `${p}step`),
+    out_reg_buffer: mssU8(mss, `${p}outRegBuffer`),
+    env_reg_buffer: mssU8(mss, `${p}envRegBuffer`),
+    voice_end_buffer: mssU8(mss, `${p}voiceEndBuffer`),
+    voice_output: mssI32(mss, `${p}voiceOutput`),
+    out_samples: i32Pair(mss, `${p}outSamples`),
+    pitch: mssI32(mss, `${p}pitch`),
+    sample_address: mssU16(mss, `${p}sampleAddress`),
+    brr_next_address: mssU16(mss, `${p}brrNextAddress`),
+    dir: mssU8(mss, `${p}dirSampleTableAddress`),
+    noise_on: mssU8(mss, `${p}noiseOn`),
+    pitch_mod_on: mssU8(mss, `${p}pitchModulationOn`),
+    key_on: mssU8(mss, `${p}keyOn`),
+    new_key_on: mssU8(mss, `${p}newKeyOn`),
+    key_off: mssU8(mss, `${p}keyOff`),
+    every_other_sample: mssU8(mss, `${p}everyOtherSample`, 1),
+    source_number: mssU8(mss, `${p}sourceNumber`),
+    brr_header: mssU8(mss, `${p}brrHeader`),
+    brr_data: mssU8(mss, `${p}brrData`),
+    looped: mssU8(mss, `${p}looped`),
+    adsr1: mssU8(mss, `${p}adsr1`),
+    echo_in: i32Pair(mss, `${p}echoIn`),
+    echo_out: i32Pair(mss, `${p}echoOut`),
+    echo_history: mssBytes(mss, `${p}echoHistory`, DSP_ECHO_HIST) ?? undefined,
+    echo_pointer: mssU16(mss, `${p}echoPointer`),
+    echo_length: mssU16(mss, `${p}echoLength`),
+    echo_offset: mssU16(mss, `${p}echoOffset`),
+    echo_history_pos: mssU8(mss, `${p}echoHistoryPos`),
+    echo_ring: mssU8(mss, `${p}echoRingBufferAddress`),
+    echo_on: mssU8(mss, `${p}echoOn`),
+    echo_enabled: mssU8(mss, `${p}echoEnabled`),
+  };
+}
+
+function writeDspState(mss: MssFile, d: DspMixer): void {
+  const p = 'spc.dsp.';
+  if (d.noise_lfsr != null) mssAddI32(mss, `${p}noiseLfsr`, d.noise_lfsr);
+  if (d.counter != null) mssAddU16(mss, `${p}counter`, d.counter);
+  if (d.step != null) mssAddU8(mss, `${p}step`, d.step);
+  if (d.out_reg_buffer != null) mssAddU8(mss, `${p}outRegBuffer`, d.out_reg_buffer);
+  if (d.env_reg_buffer != null) mssAddU8(mss, `${p}envRegBuffer`, d.env_reg_buffer);
+  if (d.voice_end_buffer != null) mssAddU8(mss, `${p}voiceEndBuffer`, d.voice_end_buffer);
+  if (d.voice_output != null) mssAddI32(mss, `${p}voiceOutput`, d.voice_output);
+  writeI32Pair(mss, `${p}outSamples`, d.out_samples);
+  if (d.pitch != null) mssAddI32(mss, `${p}pitch`, d.pitch);
+  if (d.sample_address != null) mssAddU16(mss, `${p}sampleAddress`, d.sample_address);
+  if (d.brr_next_address != null) mssAddU16(mss, `${p}brrNextAddress`, d.brr_next_address);
+  if (d.dir != null) mssAddU8(mss, `${p}dirSampleTableAddress`, d.dir);
+  if (d.noise_on != null) mssAddU8(mss, `${p}noiseOn`, d.noise_on);
+  if (d.pitch_mod_on != null) mssAddU8(mss, `${p}pitchModulationOn`, d.pitch_mod_on);
+  if (d.key_on != null) mssAddU8(mss, `${p}keyOn`, d.key_on);
+  if (d.new_key_on != null) mssAddU8(mss, `${p}newKeyOn`, d.new_key_on);
+  if (d.key_off != null) mssAddU8(mss, `${p}keyOff`, d.key_off);
+  mssAddU8(mss, `${p}everyOtherSample`, d.every_other_sample ?? 1);
+  if (d.source_number != null) mssAddU8(mss, `${p}sourceNumber`, d.source_number);
+  if (d.brr_header != null) mssAddU8(mss, `${p}brrHeader`, d.brr_header);
+  if (d.brr_data != null) mssAddU8(mss, `${p}brrData`, d.brr_data);
+  if (d.looped != null) mssAddU8(mss, `${p}looped`, d.looped);
+  if (d.adsr1 != null) mssAddU8(mss, `${p}adsr1`, d.adsr1);
+  writeI32Pair(mss, `${p}echoIn`, d.echo_in);
+  writeI32Pair(mss, `${p}echoOut`, d.echo_out);
+  if (d.echo_history) mssAdd(mss, `${p}echoHistory`, pad(d.echo_history, DSP_ECHO_HIST));
+  if (d.echo_pointer != null) mssAddU16(mss, `${p}echoPointer`, d.echo_pointer);
+  if (d.echo_length != null) mssAddU16(mss, `${p}echoLength`, d.echo_length);
+  if (d.echo_offset != null) mssAddU16(mss, `${p}echoOffset`, d.echo_offset);
+  if (d.echo_history_pos != null) mssAddU8(mss, `${p}echoHistoryPos`, d.echo_history_pos);
+  if (d.echo_ring != null) mssAddU8(mss, `${p}echoRingBufferAddress`, d.echo_ring);
+  if (d.echo_on != null) mssAddU8(mss, `${p}echoOn`, d.echo_on);
+  if (d.echo_enabled != null) mssAddBool(mss, `${p}echoEnabled`, d.echo_enabled);
 }
 
 function readVoices(mss: MssFile): DspVoice[] | undefined {
@@ -476,17 +588,17 @@ function readVoices(mss: MssFile): DspVoice[] | undefined {
   for (let i = 0; i < 8; i += 1) {
     const p = `spc.dsp.voices[${i}].`;
     voices.push({
-      env_volume: mssU16(mss, `${p}envVolume`),
-      prev_calculated_env: mssU16(mss, `${p}prevCalculatedEnv`),
-      interpolation_pos: mssU16(mss, `${p}interpolationPos`),
-      env_mode: mssU8(mss, `${p}envMode`),
+      env_volume: mssI32(mss, `${p}envVolume`),
+      prev_calculated_env: mssI32(mss, `${p}prevCalculatedEnv`),
+      interpolation_pos: mssI32(mss, `${p}interpolationPos`),
+      env_mode: mssI32(mss, `${p}envMode`),
       brr_address: mssU16(mss, `${p}brrAddress`),
-      brr_offset: mssU8(mss, `${p}brrOffset`),
+      brr_offset: mssU16(mss, `${p}brrOffset`),
       voice_bit: mssU8(mss, `${p}voiceBit`),
       key_on_delay: mssU8(mss, `${p}keyOnDelay`),
-      env_out: mssU16(mss, `${p}envOut`),
+      env_out: mssU8(mss, `${p}envOut`),
       buffer_pos: mssU8(mss, `${p}bufferPos`),
-      sample_buffer: mssBytes(mss, `${p}sampleBuffer`, 12) ?? undefined,
+      sample_buffer: mssBytes(mss, `${p}sampleBuffer`, DSP_SAMPLE_BUF) ?? undefined,
     });
   }
   return voices;
@@ -496,17 +608,19 @@ function writeVoices(mss: MssFile, voices: DspVoice[]): void {
   for (let i = 0; i < Math.min(8, voices.length); i += 1) {
     const v = voices[i]!;
     const p = `spc.dsp.voices[${i}].`;
-    mssAddU16(mss, `${p}envVolume`, v.env_volume);
-    mssAddU16(mss, `${p}prevCalculatedEnv`, v.prev_calculated_env);
-    mssAddU16(mss, `${p}interpolationPos`, v.interpolation_pos);
-    mssAddU8(mss, `${p}envMode`, v.env_mode);
+    // Mesen DspVoice: int32 env/interp, enum envMode, uint16 brrOffset, int16[12] sampleBuffer.
+    // Binary load ignores values shorter than sizeof(T) — u16 envVolume left voices at Release/0.
+    mssAddI32(mss, `${p}envVolume`, v.env_volume);
+    mssAddI32(mss, `${p}prevCalculatedEnv`, v.prev_calculated_env);
+    mssAddI32(mss, `${p}interpolationPos`, v.interpolation_pos);
+    mssAddI32(mss, `${p}envMode`, v.env_mode);
     mssAddU16(mss, `${p}brrAddress`, v.brr_address);
-    mssAddU8(mss, `${p}brrOffset`, v.brr_offset);
+    mssAddU16(mss, `${p}brrOffset`, v.brr_offset);
     mssAddU8(mss, `${p}voiceBit`, v.voice_bit);
     mssAddU8(mss, `${p}keyOnDelay`, v.key_on_delay);
-    mssAddU16(mss, `${p}envOut`, v.env_out);
+    mssAddU8(mss, `${p}envOut`, v.env_out);
     mssAddU8(mss, `${p}bufferPos`, v.buffer_pos);
-    if (v.sample_buffer) mssAdd(mss, `${p}sampleBuffer`, v.sample_buffer);
+    mssAdd(mss, `${p}sampleBuffer`, pad(v.sample_buffer ?? new Uint8Array(0), DSP_SAMPLE_BUF));
   }
 }
 
@@ -605,7 +719,7 @@ export function mssToPortable(mss: MssFile, opts: MssToPortableOpts): RhState1 {
   const oam = first(mss, ['ppu.oamRam']) ?? null;
   const sram = first(mss, ['cart.saveRam']) ?? null;
   const aram = first(mss, ['spc.ram']) ?? null;
-  const dsp = first(mss, ['spc.dsp.regs']) ?? null;
+  const dsp = first(mss, ['spc.dsp.regs', 'spc.dsp.externalRegs']) ?? null;
   const sa1Iram = first(mss, ['cart.coprocessor.iRam', 'cart.sa1.iRam']) ?? null;
   const gsuWram = first(mss, ['cart.coprocessor.gsuRam', 'cart.gsu.gsuRam']) ?? null;
   const cx4 = first(mss, ['cart.coprocessor.dataRam', 'cart.cx4.dataRam']) ?? null;
@@ -631,6 +745,7 @@ export function mssToPortable(mss: MssFile, opts: MssToPortableOpts): RhState1 {
   const internal = readInternal(mss);
   const spc = readSpc(mss);
   const dsp_voices = readVoices(mss);
+  const dsp_state = readDspState(mss);
   const sa1CpuBlob = mssGet(mss, 'cart.coprocessor.cpu.a') || mssGet(mss, 'cart.sa1.cpu.a');
   const sa1 = sa1CpuBlob
     ? { cpu: readCpu(mss, mssGet(mss, 'cart.sa1.cpu.a') ? 'cart.sa1.cpu.' : 'cart.coprocessor.cpu.') }
@@ -660,6 +775,7 @@ export function mssToPortable(mss: MssFile, opts: MssToPortableOpts): RhState1 {
     internal,
     sa1,
     dsp_voices,
+    dsp_state,
   };
   pushSec(sections, 'fillram', 0, reconstructFillram(state), FILLRAM);
   return state;
@@ -701,6 +817,7 @@ export function portableToMss(state: RhState1, romName: string): MssFile {
   writeInternal(mss, ir);
   if (state.spc) writeSpc(mss, state.spc);
   if (state.dsp_voices) writeVoices(mss, state.dsp_voices);
+  if (state.dsp_state) writeDspState(mss, state.dsp_state);
   if (state.sa1) writeCpu(mss, 'cart.coprocessor.cpu.', state.sa1.cpu);
 
   const addSec = (id: string, key: string): void => {
@@ -714,6 +831,8 @@ export function portableToMss(state: RhState1, romName: string): MssFile {
   addSec('sram', 'cart.saveRam');
   addSec('spc_aram', 'spc.ram');
   addSec('dsp', 'spc.dsp.regs');
+  const dspRegs = getSectionDecoded(state, 'dsp');
+  if (dspRegs) mssAdd(mss, 'spc.dsp.externalRegs', dspRegs);
   addSec('sa1_iram', 'cart.coprocessor.iRam');
   addSec('gsu_wram', 'cart.coprocessor.gsuRam');
   addSec('cx4_data', 'cart.coprocessor.dataRam');
@@ -849,7 +968,14 @@ export function portableToSetState(state: RhState1): Record<string, number | boo
     n('spc.dspReg', spc.dsp_reg);
     b('spc.romEnabled', spc.rom_enabled);
     b('spc.timersEnabled', spc.timers_enabled);
+    b('spc.writeEnabled', spc.write_enabled ?? 1);
+    b('spc.timersDisabled', spc.timers_disabled ?? 0);
+    n('spc.internalSpeed', spc.internal_speed);
+    n('spc.externalSpeed', spc.external_speed);
     n('spc.cycle', spc.cycle);
+    (spc.cpu_regs ?? []).forEach((v, i) => n(`spc.cpuRegs[${i}]`, v));
+    (spc.output_reg ?? []).forEach((v, i) => n(`spc.outputReg[${i}]`, v));
+    (spc.ram_reg ?? []).forEach((v, i) => n(`spc.ramReg[${i}]`, v));
   }
   return o;
 }

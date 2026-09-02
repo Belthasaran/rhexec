@@ -60,8 +60,13 @@ export interface Spc700 {
   timers_enabled?: number;
   cpu_regs?: number[];
   output_reg?: number[];
+  ram_reg?: number[];
   /** SPC cycle counter (Mesen `spc.cycle`). */
   cycle?: number;
+  write_enabled?: number;
+  timers_disabled?: number;
+  internal_speed?: number;
+  external_speed?: number;
   timers?: SpcTimer[];
 }
 
@@ -211,7 +216,45 @@ export interface DspVoice {
   key_on_delay: number;
   env_out: number;
   buffer_pos: number;
+  /** 12 × int16 LE (24 bytes). Older files may store 12 bytes. */
   sample_buffer?: Uint8Array;
+}
+
+/** DSP mixer latches (not the 128-byte register file in section `dsp`). */
+export interface DspMixer {
+  noise_lfsr?: number;
+  counter?: number;
+  step?: number;
+  out_reg_buffer?: number;
+  env_reg_buffer?: number;
+  voice_end_buffer?: number;
+  voice_output?: number;
+  out_samples?: number[];
+  pitch?: number;
+  sample_address?: number;
+  brr_next_address?: number;
+  dir?: number;
+  noise_on?: number;
+  pitch_mod_on?: number;
+  key_on?: number;
+  new_key_on?: number;
+  key_off?: number;
+  every_other_sample?: number;
+  source_number?: number;
+  brr_header?: number;
+  brr_data?: number;
+  looped?: number;
+  adsr1?: number;
+  echo_in?: number[];
+  echo_out?: number[];
+  echo_history?: Uint8Array;
+  echo_pointer?: number;
+  echo_length?: number;
+  echo_offset?: number;
+  echo_history_pos?: number;
+  echo_ring?: number;
+  echo_on?: number;
+  echo_enabled?: number;
 }
 
 export interface Sa1State {
@@ -266,6 +309,7 @@ export interface RhState1 {
   sa1?: Sa1State;
   gsu?: GsuState;
   dsp_voices?: DspVoice[];
+  dsp_state?: DspMixer;
   [key: string]: unknown;
 }
 

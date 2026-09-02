@@ -16,6 +16,7 @@ export {
   type DmaState,
   type InternalRegs,
   type DspVoice,
+  type DspMixer,
   type MutateParams,
   type SectionEncoding,
   type CaptureMode,

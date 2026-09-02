@@ -22,6 +22,7 @@ Dump directory (temp): `mesen.mss` (deleted after parse), `wram.bin` / coprocess
 
 - Capture is at an instruction boundary after `startFrame` (vblank-ish). Mid-scanline PPU shift registers / mid-DMA are not snapshotted.
 - Synth `.mss` keys must match Mesen `NormalizeName` (e.g. `ppu.layers[0].tilemapAddress`, not `TilemapAddress`). Missing keys leave **boot** PPU/HDMA/clocks in place.
+- DSP voice keys must match C++ widths (`int32` `envVolume`/`envMode`, `uint16` `brrOffset`, 24-byte `sampleBuffer`). Shorter values are ignored and voices stay silent.
 - `emu.loadSavestate` from Lua does not fire `StateLoaded`, so uninit-read tracking stays on unless `resetAccessCounters` runs after `masterClock` is restored.
 - One-frame HDMA/audio hitch is acceptable if Mesen fills scheduler internals with defaults (same as s9x_mss).
 - `--level` on an `in_level` capture only pokes `$13BF` / `$0F`; it does not re-run level init.

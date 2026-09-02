@@ -15,12 +15,13 @@ Checklist vs Snes9x v12 freeze (`snapshot.cpp`) / [s9x_mss](https://github.com/s
 | `rom` | map | `sha1`, `size`, `headered`, `mapping`, `sa1` |
 | `host` | map | `emulator` (e.g. `mesen2`), `mode` (`auto`/`manual`) |
 | `cpu` | map | 5A22 `a,x,y,d,db,p,sp,pc,e` plus `waiting`, `nmi_pending`, `irq_pending`. `pc` is 24-bit (`K<<16\|PC`) |
-| `spc` | map | SPC-700 `a,x,y,psw,sp,pc`, ports, timers, `dsp_reg`, `rom_enabled` |
+| `spc` | map | SPC-700 `a,x,y,psw,sp,pc`, ports, timers, `dsp_reg`, `rom_enabled`, optional `write_enabled` / `internal_speed` / `external_speed` |
 | `ppu` | map | MMIO-equivalent (forced blank, BGMODE, TM/TS, layers, Mode7, windows, VMA, OAM, color math) |
 | `dma` | map | `hdma_channels` (`$420C`) + 8 channels (`$4300–$437F` meaning) |
 | `internal` | map | `$4200` family, H/V IRQ timers, FastROM, auto-joypad, WRAM port `$2181–$2183`, optional `master_clock` / `hclock` (SNES scheduler) |
 | `sa1` / `gsu` | map | optional coprocessor CPU/regs |
-| `dsp_voices` | array | optional 8 DSP voice envelopes |
+| `dsp_voices` | array | optional 8 DSP voice envelopes (`env_volume` is 11.8-style int, `sample_buffer` 24 bytes) |
+| `dsp_state` | map | optional DSP mixer latches (key-on, echo, BRR step) |
 | `trigger` | map | `game_mode`, `pc`, `frame`, optional `scanline`, `hclock`, `region` |
 | `sections` | array | `{ id, bus, encoding, data }` |
 

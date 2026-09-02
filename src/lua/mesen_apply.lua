@@ -108,9 +108,13 @@ local function on_exec()
   -- or Lua's stringstream load is a no-op.
   if not loaded then
     fallback_writes()
-  elseif WRAM_PATH then
+  else
     local mt = memtypes()
-    write_region(WRAM_PATH, mt.wram)
+    if WRAM_PATH then write_region(WRAM_PATH, mt.wram) end
+    -- Lua memType.spcDspRegisters is ExternalRegs; mixer uses Regs from the MSS.
+    if SPC_PATH then write_region(SPC_PATH, mt.spc) end
+    if DSP_PATH then write_region(DSP_PATH, mt.dsp) end
+    if SRAM_PATH then write_region(SRAM_PATH, mt.sram) end
   end
   if SETSTATE and emu.setState then
     pcall(function() emu.setState(SETSTATE) end)
