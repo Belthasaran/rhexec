@@ -183,6 +183,7 @@ function readPpu(mss: MssFile): PpuState {
     oam_base: mssU16(mss, 'ppu.oamBaseAddress'),
     oam_addr: mssU16(mss, 'ppu.oamRamAddress'),
     oam_priority: mssU8(mss, 'ppu.enableOamPriority'),
+    oam_address_offset: mssU16(mss, 'ppu.oamAddressOffset'),
     hi_res: mssU8(mss, 'ppu.hiResMode'),
     screen_interlace: mssU8(mss, 'ppu.screenInterlace'),
     obj_interlace: mssU8(mss, 'ppu.objInterlace'),
@@ -237,6 +238,7 @@ function writePpu(mss: MssFile, ppu: PpuState): void {
   mssAddU16(mss, 'ppu.oamBaseAddress', ppu.oam_base);
   mssAddU16(mss, 'ppu.oamRamAddress', ppu.oam_addr);
   mssAddBool(mss, 'ppu.enableOamPriority', ppu.oam_priority);
+  if (ppu.oam_address_offset != null) mssAddU16(mss, 'ppu.oamAddressOffset', ppu.oam_address_offset);
   mssAddBool(mss, 'ppu.hiResMode', ppu.hi_res);
   mssAddBool(mss, 'ppu.screenInterlace', ppu.screen_interlace);
   mssAddBool(mss, 'ppu.objInterlace', ppu.obj_interlace);
@@ -777,6 +779,7 @@ export function portableToSetState(state: RhState1): Record<string, number | boo
     n('ppu.oamBaseAddress', ppu.oam_base);
     n('ppu.oamRamAddress', ppu.oam_addr);
     b('ppu.enableOamPriority', ppu.oam_priority);
+    n('ppu.oamAddressOffset', ppu.oam_address_offset);
     b('ppu.hiResMode', ppu.hi_res);
     n('ppu.colorMathEnabled', ppu.color_math_enabled);
     n('ppu.fixedColor', ppu.fixed_color);
@@ -861,7 +864,11 @@ export function setStateToLua(map: Record<string, number | boolean>): string {
 
 /** Apply Mesen getState scalar keys (fallback when no .mss). Unknown keys ignored. */
 export function applyMesenScalarKeys(state: RhState1, keys: Record<string, number>): void {
-  const n = (k: string, d = 0) => Number(keys[k]) || d;
+  const n = (k: string, d = 0) => {
+    if (keys[k] == null) return d;
+    const v = Number(keys[k]);
+    return Number.isFinite(v) ? v : d;
+  };
   if (keys['cpu.a'] != null || keys['cpu.pc'] != null) {
     const pc16 = n('cpu.pc');
     const k = n('cpu.k');
@@ -873,7 +880,7 @@ export function applyMesenScalarKeys(state: RhState1, keys: Record<string, numbe
       db: n('cpu.dbr', n('cpu.db')),
       p: n('cpu.ps', n('cpu.p')),
       sp: n('cpu.sp'),
-      pc: k ? ((k & 0xff) << 16) | (pc16 & 0xffff) : n('cpu.pc'),
+      pc: ((k & 0xff) << 16) | (pc16 & 0xffff),
       e: n('cpu.emulationMode', 1),
       waiting: n('cpu.stopState') === STOP_WAIT ? 1 : 0,
       nmi_pending: n('cpu.needNmi'),

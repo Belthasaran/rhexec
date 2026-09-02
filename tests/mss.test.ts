@@ -72,6 +72,7 @@ test('portable cpu/fillram/ppu/dma/spc/dsp_voices map to Mesen keys', () => {
   assert.equal(mssU8(mss, 'cpu.k'), 0x80);
   assert.equal(mssU16(mss, 'cpu.pc'), 0x8123);
   assert.equal(mssU8(mss, 'cpu.stopState'), 2);
+  assert.equal(mssU8(mss, 'cpu.emulationMode'), 0);
   assert.equal(mssU8(mss, 'cpu.needNmi'), 1);
   assert.equal(mssU8(mss, 'spc.a'), 1);
   assert.equal(mssU8(mss, 'ppu.forcedBlank'), 1);
@@ -94,6 +95,7 @@ test('portable cpu/fillram/ppu/dma/spc/dsp_voices map to Mesen keys', () => {
   });
   assert.equal(back.cpu.a, 0x1111);
   assert.equal(back.cpu.pc, 0x808123);
+  assert.equal(back.cpu.e, 0);
   assert.equal(back.cpu.waiting, 1);
   assert.equal(back.cpu.nmi_pending, 1);
   assert.equal(back.spc?.a, 1);

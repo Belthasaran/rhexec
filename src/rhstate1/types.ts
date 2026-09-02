@@ -105,6 +105,8 @@ export interface PpuState {
   oam_base: number;
   oam_addr: number;
   oam_priority: number;
+  /** $2101 name-select offset (Mesen `ppu.oamAddressOffset`). */
+  oam_address_offset?: number;
   hi_res: number;
   screen_interlace: number;
   obj_interlace: number;
@@ -296,23 +298,32 @@ export function emptyDmaChannel(): DmaChannel {
 
 export function normalizeCpu(raw: Partial<Cpu5A22> | null | undefined): Cpu5A22 {
   const r = raw ?? {};
+  const num = (v: unknown, fallback: number): number => {
+    if (v == null || v === '') return fallback;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const pc = num(r.pc, 0);
+  // `0 || 1` used to force native-mode captures (e=0) into emulation mode.
+  let e = r.e == null ? 1 : num(r.e, 1);
+  if (e && ((pc >>> 16) & 0xff)) e = 0;
   return {
-    a: Number(r.a) || 0,
-    x: Number(r.x) || 0,
-    y: Number(r.y) || 0,
-    d: Number(r.d) || 0,
-    db: Number(r.db) || 0,
-    p: Number(r.p) || 0,
-    sp: Number(r.sp) || 0,
-    pc: Number(r.pc) || 0,
-    e: Number(r.e) || 1,
-    waiting: Number(r.waiting) || 0,
-    nmi_pending: Number(r.nmi_pending) || 0,
-    irq_pending: Number(r.irq_pending) || 0,
-    cycle_count: r.cycle_count != null ? Number(r.cycle_count) : undefined,
-    nmi_flag_counter: r.nmi_flag_counter != null ? Number(r.nmi_flag_counter) : undefined,
-    irq_lock: r.irq_lock != null ? Number(r.irq_lock) : undefined,
-    wai_over: r.wai_over != null ? Number(r.wai_over) : undefined,
-    prev_irq: r.prev_irq != null ? Number(r.prev_irq) : undefined,
+    a: num(r.a, 0),
+    x: num(r.x, 0),
+    y: num(r.y, 0),
+    d: num(r.d, 0),
+    db: num(r.db, 0),
+    p: num(r.p, 0),
+    sp: num(r.sp, 0),
+    pc,
+    e,
+    waiting: num(r.waiting, 0),
+    nmi_pending: num(r.nmi_pending, 0),
+    irq_pending: num(r.irq_pending, 0),
+    cycle_count: r.cycle_count != null ? num(r.cycle_count, 0) : undefined,
+    nmi_flag_counter: r.nmi_flag_counter != null ? num(r.nmi_flag_counter, 0) : undefined,
+    irq_lock: r.irq_lock != null ? num(r.irq_lock, 0) : undefined,
+    wai_over: r.wai_over != null ? num(r.wai_over, 0) : undefined,
+    prev_irq: r.prev_irq != null ? num(r.prev_irq, 0) : undefined,
   };
 }

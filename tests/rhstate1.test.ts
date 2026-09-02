@@ -3,6 +3,7 @@ import { deflateSync } from 'node:zlib';
 import { test } from 'node:test';
 import { decodeRle0, encodeRle0, maybeDecode } from '../src/rhstate1/rle0.ts';
 import { decodeRhState1, encodeRhState1 } from '../src/rhstate1/codec.ts';
+import { normalizeCpu } from '../src/rhstate1/types.ts';
 import { makeState } from './helpers.ts';
 
 test('rle0 round-trips mixed zeros and literals', () => {
@@ -19,6 +20,13 @@ test('rle0 256 zeros uses two runs', () => {
   assert.equal(enc[2], 0);
   assert.equal(enc[3], 1);
   assert.equal(decodeRle0(enc).length, 256);
+});
+
+test('normalizeCpu keeps native-mode e=0 and repairs e=1 with a non-zero K', () => {
+  assert.equal(normalizeCpu({ e: 0, pc: 0x808000 }).e, 0);
+  assert.equal(normalizeCpu({ e: 1, pc: 0x95feec }).e, 0);
+  assert.equal(normalizeCpu({ e: 1, pc: 0x8000 }).e, 1);
+  assert.equal(normalizeCpu({ a: 0, e: 0, pc: 0x80beef }).a, 0);
 });
 
 test('RHSTATE1 magic + msgpack round-trip keeps unknown keys', () => {
