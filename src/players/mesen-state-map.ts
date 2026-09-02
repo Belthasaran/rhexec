@@ -106,6 +106,12 @@ function defaultMasterClock(state: RhState1): number {
   return Math.max(10_000, frame * NTSC_FRAME_CYCLES);
 }
 
+/** `Spc::Run` needs cycle < master*ratio-1; UpdateClockRatio resnaps if |delta|>20. */
+function spcCycleJustBehind(master: number): number {
+  const ratio = (MESEN_SPC_SAMPLE_RATE * 64) / NTSC_MASTER_CLOCK_RATE;
+  return Math.max(0, Math.floor(master * ratio) - 8);
+}
+
 function readCpu(mss: MssFile, prefix: string): Cpu5A22 {
   const pc16 = u16keys(mss, [`${prefix}pc`]);
   const k = u8keys(mss, [`${prefix}k`]);
@@ -855,7 +861,13 @@ export function portableToMss(state: RhState1, romName: string): MssFile {
     const ramReg = state.spc.ram_reg ?? (
       aram && aram.length > 0xf9 ? [aram[0xf8]!, aram[0xf9]!] : [0, 0]
     );
-    writeSpc(mss, { ...state.spc, ram_reg: ramReg });
+    writeSpc(mss, {
+      ...state.spc,
+      ram_reg: ramReg,
+      // Captured cycle is often 5 ticks ahead; Mesen only auto-snaps if |delta|>20,
+      // then sets cycle == master*ratio which is still 1 too high for Run().
+      cycle: spcCycleJustBehind(master),
+    });
     mssAddF64(mss, 'spc.clockRatio', (MESEN_SPC_SAMPLE_RATE * 64) / NTSC_MASTER_CLOCK_RATE);
   }
   if (state.dsp_voices) writeVoices(mss, state.dsp_voices);

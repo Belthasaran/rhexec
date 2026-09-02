@@ -202,19 +202,45 @@ local function on_exec()
   if SETSTATE and emu.setState then
     pcall(function() emu.setState(SETSTATE) end)
   end
-  -- Captured spc.cycle is often a few thousand ticks ahead of
-  -- masterClock*(sampleRate*64/clockRate). Spc::Run() then never executes.
-  -- Snap just behind the scheduler (32000 Hz underestimates Mesen's +40 tweak).
+  -- Mesen ReadMapFormat ignores Double for uint64. math.floor can be a float;
+  -- a non-integer setState of spc.cycle is a no-op and the APU stays skipped.
+  local function as_int(n)
+    if type(n) ~= "number" then return nil end
+    local i = math.tointeger(n)
+    if i then return i end
+    return math.tointeger(math.floor(n))
+  end
+
+  local cycle_before, cycle_after, cycle_target, cycle_why = nil, nil, nil, "nosnap"
   if emu.getState and emu.setState then
     local okst, st = pcall(emu.getState)
     if okst and type(st) == "table" then
-      local master = st["memoryManager.masterClock"] or st["masterClock"]
-      local rate = st["clockRate"]
-      if type(master) == "number" and type(rate) == "number" and rate > 0 then
-        local target = math.floor(master * (32000 * 64) / rate) - 64
-        if target < 0 then target = 0 end
-        pcall(function() emu.setState({ ["spc.cycle"] = target }) end)
+      cycle_before = st["spc.cycle"]
+      local master = as_int(st["memoryManager.masterClock"] or st["masterClock"])
+      local rate = as_int(st["clockRate"])
+      local ratio = st["spc.clockRatio"]
+      local target = nil
+      if master and type(ratio) == "number" and ratio > 0 then
+        target = as_int(math.floor(master * ratio) - 8)
+      elseif master and rate and rate > 0 then
+        target = as_int(math.floor(master * (32040 * 64) / rate) - 8)
+      else
+        cycle_why = "noratio"
       end
+      if target then
+        if target < 0 then target = 0 end
+        cycle_target = target
+        pcall(function() emu.setState({ ["spc.cycle"] = target }) end)
+        local ok2, st2 = pcall(emu.getState)
+        if ok2 and type(st2) == "table" then
+          cycle_after = st2["spc.cycle"]
+          cycle_why = tostring(st2["spc.enabled"]) .. "/pc=" .. tostring(st2["spc.pc"])
+        else
+          cycle_why = "posted"
+        end
+      end
+    else
+      cycle_why = "noget"
     end
   end
   -- setState cannot write ARAM (Map format skips large arrays). Re-check
@@ -236,8 +262,10 @@ local function on_exec()
   else
     poke_dsp_flg()
   end
-  write_status(string.format("loaded=%s spc=%s/%s why=%s/%s\n",
-    tostring(loaded), tostring(spc_ok), tostring(spc_ok2), tostring(spc_why), tostring(spc_why2)))
+  write_status(string.format(
+    "loaded=%s spc=%s/%s why=%s/%s cycle_before=%s target=%s after=%s extra=%s\n",
+    tostring(loaded), tostring(spc_ok), tostring(spc_ok2), tostring(spc_why), tostring(spc_why2),
+    tostring(cycle_before), tostring(cycle_target), tostring(cycle_after), tostring(cycle_why)))
   -- Lua loadSavestate does not run StateLoaded, so uninit-read tracking stays
   -- at power-on. After masterClock is restored, reset so Mesen stops logging
   -- every WRAM read as uninitialized.

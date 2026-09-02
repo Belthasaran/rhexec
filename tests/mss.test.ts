@@ -177,6 +177,8 @@ test('apply script restores in a single cpuExec with loadSavestate', () => {
   assert.match(lua, /overlay_spc/);
   assert.match(lua, /spcMemory/);
   assert.match(lua, /apply_spc/);
+  assert.match(lua, /32040/);
+  assert.match(lua, /tointeger/);
   assert.match(lua, /\["internalRegisters.enableNmi"\] = true/);
   assert.doesNotMatch(lua, /addEventCallback/);
   const execIdx = lua.indexOf('on_exec');
@@ -304,6 +306,24 @@ test('launch synth fills clockRatio, speeds, ramReg, and mixer when dsp_state is
   const map = portableToSetState(st);
   assert.equal(map['spc.internalSpeed'], 0);
   assert.equal(map['spc.enabled'], true);
+  assert.equal(map['spc.cycle'], undefined);
+});
+
+test('synth spc.cycle sits just behind masterClock*ratio so Spc::Run executes', () => {
+  const master = 21477272;
+  const st = makeState(new Uint8Array(0x20000), {
+    spc: { a: 0, x: 0, y: 0, psw: 0, sp: 0xff, pc: 0x200, cycle: 999999999 },
+    internal: {
+      enable_nmi: 1, enable_v_irq: 0, enable_h_irq: 0, enable_auto_joy: 1,
+      h_timer: 0, v_timer: 0, enable_fastrom: 1, io_port: 0xff, wram_port: 0,
+      master_clock: master,
+    },
+  });
+  const mss = portableToMss(st, 'game.sfc');
+  const cycle = mssU64(mss, 'spc.cycle');
+  const ratioTarget = Math.floor(master * (32040 * 64) / 21477272);
+  assert.equal(cycle, ratioTarget - 8);
+  assert.ok(cycle < ratioTarget - 1);
 });
 
 test('rhlaunch1-mesen rejects --out (use rhboot1-sfc)', () => {
