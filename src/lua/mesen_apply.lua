@@ -95,7 +95,6 @@ end
 local function on_exec()
   if applied then return end
   applied = true
-  if emu.breakExecution then pcall(emu.breakExecution) end
   local loaded = false
   if MSS_PATH and emu.loadSavestate then
     local blob = read_all(MSS_PATH)
