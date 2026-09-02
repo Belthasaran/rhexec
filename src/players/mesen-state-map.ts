@@ -9,6 +9,7 @@ import {
   mssAddU16,
   mssAddU32,
   mssAddU64,
+  mssAddF64,
   mssBytes,
   mssGet,
   mssI32,
@@ -94,6 +95,9 @@ function u64keys(mss: MssFile, keys: string[], fallback = 0): number {
 }
 
 const NTSC_FRAME_CYCLES = 357368;
+/** Mesen NTSC master clock and default SPC sample-rate tweak (32040 Hz). */
+const NTSC_MASTER_CLOCK_RATE = 21477272;
+const MESEN_SPC_SAMPLE_RATE = 32040;
 
 function defaultMasterClock(state: RhState1): number {
   const have = state.internal?.master_clock;
@@ -474,17 +478,20 @@ function writeSpc(mss: MssFile, spc: Spc700): void {
   if (spc.timers_enabled != null) mssAddBool(mss, 'spc.timersEnabled', spc.timers_enabled);
   mssAddBool(mss, 'spc.writeEnabled', spc.write_enabled ?? 1);
   mssAddBool(mss, 'spc.timersDisabled', spc.timers_disabled ?? 0);
-  if (spc.internal_speed != null) mssAddU8(mss, 'spc.internalSpeed', spc.internal_speed);
-  if (spc.external_speed != null) mssAddU8(mss, 'spc.externalSpeed', spc.external_speed);
+  // Speed 0 is valid (and what in-level captures store). Omitting the key
+  // leaves Mesen's boot garbage, which desyncs IncCycleCount vs the DSP.
+  mssAddU8(mss, 'spc.internalSpeed', spc.internal_speed ?? 0);
+  mssAddU8(mss, 'spc.externalSpeed', spc.external_speed ?? 0);
   mssAddBool(mss, 'spc.enabled', 1);
-  mssAddU8(mss, 'spc.stopState', 0);
   mssAddU8(mss, 'spc.opStep', 0);
   mssAddU8(mss, 'spc.opSubStep', 0);
   mssAddBool(mss, 'spc.pendingCpuRegUpdate', 0);
-  (spc.cpu_regs ?? []).forEach((v, i) => mssAddU8(mss, `spc.cpuRegs[${i}]`, v));
-  (spc.output_reg ?? []).forEach((v, i) => mssAddU8(mss, `spc.outputReg[${i}]`, v));
-  (spc.ram_reg ?? []).forEach((v, i) => mssAddU8(mss, `spc.ramReg[${i}]`, v));
-  if ((spc.cpu_regs ?? []).length) mssAdd(mss, 'spc.newCpuRegs', Uint8Array.from(spc.cpu_regs ?? []));
+  const cpuRegs = spc.cpu_regs ?? [0, 0, 0, 0];
+  cpuRegs.forEach((v, i) => mssAddU8(mss, `spc.cpuRegs[${i}]`, v));
+  (spc.output_reg ?? [0, 0, 0, 0]).forEach((v, i) => mssAddU8(mss, `spc.outputReg[${i}]`, v));
+  const ramReg = spc.ram_reg ?? [0, 0];
+  ramReg.forEach((v, i) => mssAddU8(mss, `spc.ramReg[${i}]`, v));
+  mssAdd(mss, 'spc.newCpuRegs', Uint8Array.from(cpuRegs));
   if (spc.cycle != null) mssAddU64(mss, 'spc.cycle', spc.cycle);
   (spc.timers ?? []).forEach((t, i) => writeSpcTimer(mss, `spc.timer${i}.`, t));
 }
@@ -545,6 +552,29 @@ function readDspState(mss: MssFile): DspMixer | undefined {
     echo_ring: mssU8(mss, `${p}echoRingBufferAddress`),
     echo_on: mssU8(mss, `${p}echoOn`),
     echo_enabled: mssU8(mss, `${p}echoEnabled`),
+  };
+}
+
+/** Mixer latches from DSP regs when the .rhstate1 was captured before dsp_state existed. */
+export function inferDspState(state: RhState1): DspMixer | undefined {
+  if (state.dsp_state) return state.dsp_state;
+  const dsp = getSectionDecoded(state, 'dsp');
+  if (!dsp || dsp.length < 0x70) return undefined;
+  const flg = dsp[0x6c] ?? 0;
+  return {
+    every_other_sample: 1,
+    key_on: dsp[0x4c] ?? 0,
+    new_key_on: 0,
+    key_off: dsp[0x5c] ?? 0,
+    dir: dsp[0x5d] ?? 0,
+    echo_on: dsp[0x4d] ?? 0,
+    echo_enabled: (flg & 0x20) ? 0 : 1,
+    echo_ring: dsp[0x6d] ?? 0,
+    noise_on: dsp[0x3d] ?? 0,
+    pitch_mod_on: dsp[0x2d] ?? 0,
+    noise_lfsr: 0x4000,
+    counter: 0,
+    step: 0,
   };
 }
 
@@ -820,9 +850,17 @@ export function portableToMss(state: RhState1, romName: string): MssFile {
     hclock: state.internal?.hclock ?? state.trigger.hclock ?? 0,
   };
   writeInternal(mss, ir);
-  if (state.spc) writeSpc(mss, state.spc);
+  if (state.spc) {
+    const aram = getSectionDecoded(state, 'spc_aram');
+    const ramReg = state.spc.ram_reg ?? (
+      aram && aram.length > 0xf9 ? [aram[0xf8]!, aram[0xf9]!] : [0, 0]
+    );
+    writeSpc(mss, { ...state.spc, ram_reg: ramReg });
+    mssAddF64(mss, 'spc.clockRatio', (MESEN_SPC_SAMPLE_RATE * 64) / NTSC_MASTER_CLOCK_RATE);
+  }
   if (state.dsp_voices) writeVoices(mss, state.dsp_voices);
-  if (state.dsp_state) writeDspState(mss, state.dsp_state);
+  const mixer = inferDspState(state);
+  if (mixer) writeDspState(mss, mixer);
   if (state.sa1) writeCpu(mss, 'cart.coprocessor.cpu.', state.sa1.cpu);
 
   const addSec = (id: string, key: string): void => {
@@ -975,15 +1013,31 @@ export function portableToSetState(state: RhState1): Record<string, number | boo
     b('spc.timersEnabled', spc.timers_enabled);
     b('spc.writeEnabled', spc.write_enabled ?? 1);
     b('spc.timersDisabled', spc.timers_disabled ?? 0);
-    n('spc.internalSpeed', spc.internal_speed);
-    n('spc.externalSpeed', spc.external_speed);
+    n('spc.internalSpeed', spc.internal_speed ?? 0);
+    n('spc.externalSpeed', spc.external_speed ?? 0);
+    b('spc.enabled', 1);
     n('spc.stopState', 0);
     // Do not set spc.cycle here. Captured cycle is often slightly ahead of
     // masterClock*clockRatio, and setState runs after load's UpdateClockRatio
     // snap — leaving the SPC permanently skipped in Spc::Run().
-    (spc.cpu_regs ?? []).forEach((v, i) => n(`spc.cpuRegs[${i}]`, v));
-    (spc.output_reg ?? []).forEach((v, i) => n(`spc.outputReg[${i}]`, v));
-    (spc.ram_reg ?? []).forEach((v, i) => n(`spc.ramReg[${i}]`, v));
+    (spc.cpu_regs ?? [0, 0, 0, 0]).forEach((v, i) => n(`spc.cpuRegs[${i}]`, v));
+    (spc.output_reg ?? [0, 0, 0, 0]).forEach((v, i) => n(`spc.outputReg[${i}]`, v));
+    const aram = getSectionDecoded(state, 'spc_aram');
+    const ramReg = spc.ram_reg ?? (
+      aram && aram.length > 0xf9 ? [aram[0xf8]!, aram[0xf9]!] : []
+    );
+    ramReg.forEach((v, i) => n(`spc.ramReg[${i}]`, v));
+    (spc.timers ?? []).forEach((t, i) => {
+      const p = `spc.timer${i}.`;
+      n(`${p}stage0`, t.stage0);
+      n(`${p}stage1`, t.stage1);
+      n(`${p}stage2`, t.stage2);
+      n(`${p}output`, t.output);
+      n(`${p}target`, t.target);
+      n(`${p}prevStage1`, t.prev_stage1);
+      b(`${p}enabled`, t.enabled);
+      b(`${p}timersEnabled`, t.timers_enabled);
+    });
   }
   return o;
 }

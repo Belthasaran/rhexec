@@ -57,9 +57,12 @@ function encodeEntries(entries: MssEntry[]): Buffer {
   return Buffer.concat(parts);
 }
 
-function tinyFramebuffer(): { rawSize: number; compressed: Buffer } {
-  const raw = Buffer.alloc(4);
-  return { rawSize: 4, compressed: deflateSync(raw) };
+/** SNES-sized blank frame so miniz `uncompress` sees a real framebuffer, not a 4-byte stub. */
+function blankFramebuffer(): { rawSize: number; width: number; height: number; compressed: Buffer } {
+  const width = 256;
+  const height = 224;
+  const raw = Buffer.alloc(width * height * 4);
+  return { rawSize: raw.length, width, height, compressed: deflateSync(raw) };
 }
 
 export function parseMss(file: Uint8Array): MssFile {
@@ -173,6 +176,13 @@ export function mssAddU64(mss: MssFile, key: string, v: number): void {
   mssAdd(mss, key, b);
 }
 
+/** IEEE-754 little-endian double (Mesen `spc.clockRatio`). */
+export function mssAddF64(mss: MssFile, key: string, v: number): void {
+  const b = Buffer.alloc(8);
+  b.writeDoubleLE(Number(v), 0);
+  mssAdd(mss, key, b);
+}
+
 export function mssU8(mss: MssFile, key: string, fallback = 0): number {
   const d = mss.index.get(key);
   return d && d.length >= 1 ? d[0]! : fallback;
@@ -228,7 +238,7 @@ export function mssBytes(mss: MssFile, key: string, want: number): Uint8Array | 
 export function encodeMss(mss: MssFile): Buffer {
   const state = encodeEntries(mss.entries);
   const compressed = deflateSync(state);
-  const { rawSize, compressed: fb } = tinyFramebuffer();
+  const { rawSize, width, height, compressed: fb } = blankFramebuffer();
   const name = Buffer.from(mss.romName, 'utf8');
   return Buffer.concat([
     MSS_MAGIC,
@@ -236,8 +246,8 @@ export function encodeMss(mss: MssFile): Buffer {
     wrU32le(mss.fmtVersion),
     wrU32le(mss.consoleType),
     wrU32le(rawSize),
-    wrU32le(1),
-    wrU32le(1),
+    wrU32le(width),
+    wrU32le(height),
     wrU32le(100),
     wrU32le(fb.length),
     fb,

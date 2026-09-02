@@ -174,6 +174,9 @@ test('apply script restores in a single cpuExec with loadSavestate', () => {
   assert.match(lua, /resetAccessCounters/);
   assert.match(lua, /clockRate/);
   assert.match(lua, /spc\.cycle/);
+  assert.match(lua, /overlay_spc/);
+  assert.match(lua, /spcMemory/);
+  assert.match(lua, /apply_spc/);
   assert.match(lua, /\["internalRegisters.enableNmi"\] = true/);
   assert.doesNotMatch(lua, /addEventCallback/);
   const execIdx = lua.indexOf('on_exec');
@@ -270,6 +273,37 @@ test('old 2-byte DSP voice fields rewrite as Mesen int32/uint16', () => {
   assert.equal(mssGet(synth, 'spc.dsp.voices[0].brrOffset')!.length, 2);
   assert.equal(mssGet(synth, 'spc.dsp.voices[0].sampleBuffer')!.length, 24);
   assert.equal(mssU8(synth, 'spc.writeEnabled'), 1);
+});
+
+test('launch synth fills clockRatio, speeds, ramReg, and mixer when dsp_state is missing', () => {
+  const wram = new Uint8Array(0x20000);
+  const aram = new Uint8Array(0x10000);
+  aram[0x1015] = 0x02;
+  aram[0x1016] = 0x3f;
+  aram[0x1017] = 0x4d;
+  aram[0xf8] = 0x11;
+  aram[0xf9] = 0x22;
+  const dspRegs = new Uint8Array(128);
+  dspRegs[0x4c] = 0x03;
+  dspRegs[0x5d] = 0x80;
+  dspRegs[0x6c] = 0x20;
+  const st = makeState(wram, {
+    spc: { a: 0, x: 2, y: 20, psw: 2, sp: 0xcd, pc: 0x11b1, rom_enabled: 0, timers_enabled: 1 },
+  });
+  st.sections.push({ id: 'spc_aram', bus: 0, encoding: 'raw', data: aram });
+  st.sections.push({ id: 'dsp', bus: 0, encoding: 'raw', data: dspRegs });
+  const mss = portableToMss(st, 'game.sfc');
+  assert.equal(mssGet(mss, 'spc.clockRatio')!.length, 8);
+  assert.equal(mssU8(mss, 'spc.internalSpeed'), 0);
+  assert.equal(mssU8(mss, 'spc.externalSpeed'), 0);
+  assert.equal(mssU8(mss, 'spc.ramReg[0]'), 0x11);
+  assert.equal(mssU8(mss, 'spc.ramReg[1]'), 0x22);
+  assert.equal(mssU8(mss, 'spc.dsp.everyOtherSample'), 1);
+  assert.equal(mssU8(mss, 'spc.dsp.keyOn'), 0x03);
+  assert.equal(mssU8(mss, 'spc.dsp.dirSampleTableAddress'), 0x80);
+  const map = portableToSetState(st);
+  assert.equal(map['spc.internalSpeed'], 0);
+  assert.equal(map['spc.enabled'], true);
 });
 
 test('rhlaunch1-mesen rejects --out (use rhboot1-sfc)', () => {
