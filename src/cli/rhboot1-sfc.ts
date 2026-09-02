@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { parsePlaybackArgs, requireRomState, wantHelp } from './args.ts';
 import { decodeRhState1 } from '../rhstate1/codec.ts';
 import { applyMutations } from '../rhstate1/apply.ts';
-import { maybeDecode } from '../rhstate1/rle0.ts';
 import { buildBootRestoreRom } from '../boot/boot-restore.ts';
 
 const HELP = `rhboot1-sfc - Technique A: emit a new SFC with boot-restore stub (no loader hijacks)
@@ -21,7 +20,8 @@ Options:
   --ow-y N             Tile Y 0-31
   --help, -h
 
-Does not patch $05D89B / $05DCDD. APU and SA-1 restore are omitted in this PoC.
+Does not patch $05D89B / $05DCDD. Embeds WRAM/VRAM/CGRAM/OAM/ARAM and
+re-enables NMI. SA-1 and DSP envelopes are not restored.
 `;
 
 function defaultOut(rom: string): string {
@@ -45,10 +45,8 @@ async function main(argv: string[]): Promise<number> {
     owX: p.owX,
     owY: p.owY,
   });
-  const wram = st.sections.find((s) => s.id === 'wram');
-  if (!wram) throw new Error('missing wram');
-  const raw = maybeDecode(wram.data, wram.encoding);
-  const built = buildBootRestoreRom(new Uint8Array(readFileSync(rom)), raw, st.cpu);
+  if (!st.sections.find((s) => s.id === 'wram')) throw new Error('missing wram');
+  const built = buildBootRestoreRom(new Uint8Array(readFileSync(rom)), st);
   const out = p.out || defaultOut(rom);
   writeFileSync(out, built.rom);
   process.stdout.write(`wrote ${out} (${built.rom.length} bytes)\n`);

@@ -1,8 +1,14 @@
-; Technique A MVP boot-restore stub (see src/boot/boot-restore.ts assembler).
-; Does not touch $05D89B / $05DCDD. Reset vector is redirected to a bank-0 trampoline
-; that JML's here. Payload is four LoROM banks of WRAM ($7E/$7F).
+; Technique A boot-restore stub (assembled in src/boot/boot-restore.ts).
+; Does not touch $05D89B / $05DCDD. Reset vector → bank-0 trampoline at $00FF70
+; that JML's here (stub bank $8000).
 ;
-; APU / SA-1 restore intentionally omitted for the PoC.
+; Payload LoROM banks after the stub bank:
+;   +0..+3  WRAM 128KiB
+;   +4..+5  VRAM 64KiB
+;   +6..+7  ARAM 64KiB
+; Stub bank $8600 CGRAM, $8800 OAM, $8A20 DMA regs.
+;
+; SA-1 is not restored. DSP voice envelopes are not poked (N-SPC may re-init).
 
         sei
         clc
@@ -17,5 +23,7 @@
         sta     $2100
         lda     #$00
         sta     $4200
-        ; 4x DMA $2180 WMDATA from payload banks
-        ; then restore A,X,Y,DB,P and jml !PC
+        ; DMA WRAM, VRAM, CGRAM, OAM
+        ; IPL-upload ARAM and jump to captured SPC PC
+        ; poke PPU (scrolls write-twice), $4300–$437F, INIDISP, $4200
+        ; restore A,X,Y,DB,P and jml !PC
