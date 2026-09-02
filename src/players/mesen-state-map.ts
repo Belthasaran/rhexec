@@ -112,6 +112,56 @@ function spcCycleJustBehind(master: number): number {
   return Math.max(0, Math.floor(master * ratio) - 8);
 }
 
+/** Mesen `SpcDisUtils::_opSize`. */
+const SPC_OP_SIZE = Uint8Array.from([
+  1, 1, 2, 3, 2, 3, 1, 2, 2, 3, 3, 2, 3, 1, 3, 1,
+  2, 1, 2, 3, 2, 3, 3, 2, 3, 1, 2, 2, 1, 1, 3, 3,
+  1, 1, 2, 3, 2, 3, 1, 2, 2, 3, 3, 2, 3, 1, 3, 2,
+  2, 1, 2, 3, 2, 3, 3, 2, 3, 1, 2, 2, 1, 1, 2, 3,
+  1, 1, 2, 3, 2, 3, 1, 2, 2, 3, 3, 2, 3, 1, 3, 2,
+  2, 1, 2, 3, 2, 3, 3, 2, 3, 1, 2, 2, 1, 1, 3, 3,
+  1, 1, 2, 3, 2, 3, 1, 2, 2, 3, 3, 2, 3, 1, 3, 1,
+  2, 1, 2, 3, 2, 3, 3, 2, 3, 1, 2, 2, 1, 1, 2, 1,
+  1, 1, 2, 3, 2, 3, 1, 2, 2, 3, 3, 2, 3, 2, 1, 3,
+  2, 1, 2, 3, 2, 3, 3, 2, 3, 1, 2, 2, 1, 1, 1, 1,
+  1, 1, 2, 3, 2, 3, 1, 2, 2, 3, 3, 2, 3, 2, 1, 1,
+  2, 1, 2, 3, 2, 3, 3, 2, 3, 1, 2, 2, 1, 1, 1, 1,
+  1, 1, 2, 3, 2, 3, 1, 2, 2, 3, 3, 2, 3, 2, 1, 1,
+  2, 1, 2, 3, 2, 3, 3, 2, 2, 2, 2, 2, 1, 1, 3, 1,
+  1, 1, 2, 3, 2, 3, 1, 2, 2, 3, 3, 2, 3, 1, 1, 1,
+  2, 1, 2, 3, 2, 3, 3, 2, 2, 2, 3, 2, 1, 1, 2, 1,
+]);
+
+/**
+ * Mesen's PC is often already past the opcode (GetOpCode increments PC, then
+ * opStep=Addressing). Forcing opStep=0 at that PC executes the operand as code
+ * and the SPC wanders into sample RAM. Snap back to the opcode and fetch again
+ * (idempotent for the current instruction).
+ */
+export function alignSpcFetchPc(aram: Uint8Array | null, pc: number): number {
+  pc &= 0xffff;
+  if (!aram || aram.length < 2) return pc;
+  for (const consumed of [1, 2]) {
+    const start = (pc - consumed) & 0xffff;
+    if (start >= aram.length) continue;
+    const len = SPC_OP_SIZE[aram[start]!] ?? 1;
+    if (len > consumed) return start;
+  }
+  return pc;
+}
+
+export function prepareSpcResume(state: RhState1): void {
+  const spc = state.spc;
+  if (!spc) return;
+  // New captures store decoder state; trust PC. Old dumps omit op_step.
+  if (spc.op_step != null) return;
+  const aram = getSectionDecoded(state, 'spc_aram');
+  const aligned = alignSpcFetchPc(aram, spc.pc);
+  if (aligned !== (spc.pc & 0xffff)) spc.pc = aligned;
+  spc.op_step = 0;
+  spc.op_sub_step = 0;
+}
+
 function readCpu(mss: MssFile, prefix: string): Cpu5A22 {
   const pc16 = u16keys(mss, [`${prefix}pc`]);
   const k = u8keys(mss, [`${prefix}k`]);
@@ -468,6 +518,14 @@ function readSpc(mss: MssFile): Spc700 {
     timers_disabled: mssGet(mss, 'spc.timersDisabled') ? mssU8(mss, 'spc.timersDisabled') : undefined,
     internal_speed: mssGet(mss, 'spc.internalSpeed') ? mssU8(mss, 'spc.internalSpeed') : undefined,
     external_speed: mssGet(mss, 'spc.externalSpeed') ? mssU8(mss, 'spc.externalSpeed') : undefined,
+    op_step: mssGet(mss, 'spc.opStep') ? mssU8(mss, 'spc.opStep') : undefined,
+    op_sub_step: mssGet(mss, 'spc.opSubStep') ? mssU8(mss, 'spc.opSubStep') : undefined,
+    op_code: mssGet(mss, 'spc.opCode') ? mssU8(mss, 'spc.opCode') : undefined,
+    operand_a: mssGet(mss, 'spc.operandA') ? mssU16(mss, 'spc.operandA') : undefined,
+    operand_b: mssGet(mss, 'spc.operandB') ? mssU16(mss, 'spc.operandB') : undefined,
+    tmp1: mssGet(mss, 'spc.tmp1') ? mssU16(mss, 'spc.tmp1') : undefined,
+    tmp2: mssGet(mss, 'spc.tmp2') ? mssU16(mss, 'spc.tmp2') : undefined,
+    tmp3: mssGet(mss, 'spc.tmp3') ? mssU16(mss, 'spc.tmp3') : undefined,
     timers: hasTimers ? timers : undefined,
   };
 }
@@ -489,8 +547,14 @@ function writeSpc(mss: MssFile, spc: Spc700): void {
   mssAddU8(mss, 'spc.internalSpeed', spc.internal_speed ?? 0);
   mssAddU8(mss, 'spc.externalSpeed', spc.external_speed ?? 0);
   mssAddBool(mss, 'spc.enabled', 1);
-  mssAddU8(mss, 'spc.opStep', 0);
-  mssAddU8(mss, 'spc.opSubStep', 0);
+  mssAddU8(mss, 'spc.opStep', spc.op_step ?? 0);
+  mssAddU8(mss, 'spc.opSubStep', spc.op_sub_step ?? 0);
+  if (spc.op_code != null) mssAddU8(mss, 'spc.opCode', spc.op_code);
+  if (spc.operand_a != null) mssAddU16(mss, 'spc.operandA', spc.operand_a);
+  if (spc.operand_b != null) mssAddU16(mss, 'spc.operandB', spc.operand_b);
+  if (spc.tmp1 != null) mssAddU16(mss, 'spc.tmp1', spc.tmp1);
+  if (spc.tmp2 != null) mssAddU16(mss, 'spc.tmp2', spc.tmp2);
+  if (spc.tmp3 != null) mssAddU16(mss, 'spc.tmp3', spc.tmp3);
   mssAddBool(mss, 'spc.pendingCpuRegUpdate', 0);
   const cpuRegs = spc.cpu_regs ?? [0, 0, 0, 0];
   cpuRegs.forEach((v, i) => mssAddU8(mss, `spc.cpuRegs[${i}]`, v));
@@ -823,6 +887,7 @@ export function mssToPortable(mss: MssFile, opts: MssToPortableOpts): RhState1 {
 }
 
 export function portableToMss(state: RhState1, romName: string): MssFile {
+  prepareSpcResume(state);
   const mss = createEmptyMss(romName);
   const master = defaultMasterClock(state);
   const cpu: Cpu5A22 = {
@@ -909,6 +974,7 @@ function flag(v: number | undefined | null): boolean {
 
 /** Lua `emu.setState` map: Mesen bool fields must be real booleans, not 0/1. */
 export function portableToSetState(state: RhState1): Record<string, number | boolean> {
+  prepareSpcResume(state);
   const o: Record<string, number | boolean> = {};
   const n = (k: string, v: number | undefined | null) => {
     if (v == null || Number.isNaN(Number(v))) return;

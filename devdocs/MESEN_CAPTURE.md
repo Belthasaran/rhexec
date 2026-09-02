@@ -26,6 +26,7 @@ Dump directory (temp): `mesen.mss` (deleted after parse), `wram.bin` / coprocess
 - `emu.loadSavestate` from Lua does not fire `StateLoaded`, so uninit-read tracking stays on unless `resetAccessCounters` runs after `masterClock` is restored.
 - Do not `setState` captured `spc.cycle` after load. Mesen `Spc::Run()` skips the APU when cycle ≥ masterClock×ratio−1; the stored counter is usually a few ticks ahead, and `UpdateClockRatio` only corrects gaps >20. Synth stores cycle 8 ticks behind; apply snaps with a Lua integer (floats are ignored for uint64).
 - Synth must include `spc.clockRatio` (IEEE double), `spc.internalSpeed`/`externalSpeed` (0 is valid), and DSP mixer latches. If `dsp_state` is missing, launch infers them from the 128-byte `dsp` section.
+- Do not force `spc.opStep=0` at the captured PC. Mesen has often already fetched the opcode (`GetOpCode` increments PC). Restart at the opcode (or restore `opStep`/`opCode` from the MSS). Otherwise the SPC executes sample RAM.
 - Apply overlays ARAM after load and checks a canary (`$1015`). `write32` pcall success is not proof — boot IPL in ARAM looks like “no programming.”
 - One-frame HDMA/audio hitch is acceptable if Mesen fills scheduler internals with defaults (same as s9x_mss).
 - `--level` on an `in_level` capture only pokes `$13BF` / `$0F`; it does not re-run level init.

@@ -15,7 +15,7 @@ Checklist vs Snes9x v12 freeze (`snapshot.cpp`) / [s9x_mss](https://github.com/s
 | `rom` | map | `sha1`, `size`, `headered`, `mapping`, `sa1` |
 | `host` | map | `emulator` (e.g. `mesen2`), `mode` (`auto`/`manual`) |
 | `cpu` | map | 5A22 `a,x,y,d,db,p,sp,pc,e` plus `waiting`, `nmi_pending`, `irq_pending`. `pc` is 24-bit (`K<<16\|PC`) |
-| `spc` | map | SPC-700 `a,x,y,psw,sp,pc`, ports, timers, `dsp_reg`, `rom_enabled`, optional `write_enabled` / `internal_speed` / `external_speed` |
+| `spc` | map | SPC-700 `a,x,y,psw,sp,pc`, ports, timers, `dsp_reg`, `rom_enabled`, optional `write_enabled` / `internal_speed` / `external_speed` / `op_step` (decoder; launch aligns PC if missing) |
 | `ppu` | map | MMIO-equivalent (forced blank, BGMODE, TM/TS, layers, Mode7, windows, VMA, OAM, color math) |
 | `dma` | map | `hdma_channels` (`$420C`) + 8 channels (`$4300–$437F` meaning) |
 | `internal` | map | `$4200` family, H/V IRQ timers, FastROM, auto-joypad, WRAM port `$2181–$2183`, optional `master_clock` / `hclock` (SNES scheduler) |

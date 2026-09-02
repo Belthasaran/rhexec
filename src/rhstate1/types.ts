@@ -67,6 +67,15 @@ export interface Spc700 {
   timers_disabled?: number;
   internal_speed?: number;
   external_speed?: number;
+  /** Mesen decoder: 0=fetch opcode. Missing on old dumps — launch aligns PC. */
+  op_step?: number;
+  op_sub_step?: number;
+  op_code?: number;
+  operand_a?: number;
+  operand_b?: number;
+  tmp1?: number;
+  tmp2?: number;
+  tmp3?: number;
   timers?: SpcTimer[];
 }
 

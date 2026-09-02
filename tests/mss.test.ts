@@ -326,6 +326,36 @@ test('synth spc.cycle sits just behind masterClock*ratio so Spc::Run executes', 
   assert.ok(cycle < ratioTarget - 1);
 });
 
+test('SPC resume snaps PC back to opcode start when op_step is missing', () => {
+  const aram = new Uint8Array(0x10000);
+  aram[0x11b0] = 0xf4;
+  aram[0x11b1] = 0x81;
+  aram[0x11b2] = 0xd0;
+  const st = makeState(new Uint8Array(0x20000), {
+    spc: { a: 0, x: 2, y: 20, psw: 2, sp: 0xcd, pc: 0x11b1 },
+  });
+  st.sections.push({ id: 'spc_aram', bus: 0, encoding: 'raw', data: aram });
+  const mss = portableToMss(st, 'game.sfc');
+  assert.equal(mssU16(mss, 'spc.pc'), 0x11b0);
+  assert.equal(mssU8(mss, 'spc.opStep'), 0);
+  const map = portableToSetState(st);
+  assert.equal(map['spc.pc'], 0x11b0);
+});
+
+test('SPC resume keeps PC when op_step is already known', () => {
+  const aram = new Uint8Array(0x10000);
+  aram[0x11b0] = 0xf4;
+  aram[0x11b1] = 0x81;
+  const st = makeState(new Uint8Array(0x20000), {
+    spc: { a: 0, x: 2, y: 20, psw: 2, sp: 0xcd, pc: 0x11b1, op_step: 1, op_code: 0xf4 },
+  });
+  st.sections.push({ id: 'spc_aram', bus: 0, encoding: 'raw', data: aram });
+  const mss = portableToMss(st, 'game.sfc');
+  assert.equal(mssU16(mss, 'spc.pc'), 0x11b1);
+  assert.equal(mssU8(mss, 'spc.opStep'), 1);
+  assert.equal(mssU8(mss, 'spc.opCode'), 0xf4);
+});
+
 test('rhlaunch1-mesen rejects --out (use rhboot1-sfc)', () => {
   const cli = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'cli', 'rhlaunch1-mesen.ts');
   const r = spawnSync(process.execPath, ['--import', 'tsx', cli, '--rom', 'a.sfc', '--state', 'b.rhstate1', '--out', 'test.sfc'], {
