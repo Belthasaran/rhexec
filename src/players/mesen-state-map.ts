@@ -477,9 +477,14 @@ function writeSpc(mss: MssFile, spc: Spc700): void {
   if (spc.internal_speed != null) mssAddU8(mss, 'spc.internalSpeed', spc.internal_speed);
   if (spc.external_speed != null) mssAddU8(mss, 'spc.externalSpeed', spc.external_speed);
   mssAddBool(mss, 'spc.enabled', 1);
+  mssAddU8(mss, 'spc.stopState', 0);
+  mssAddU8(mss, 'spc.opStep', 0);
+  mssAddU8(mss, 'spc.opSubStep', 0);
+  mssAddBool(mss, 'spc.pendingCpuRegUpdate', 0);
   (spc.cpu_regs ?? []).forEach((v, i) => mssAddU8(mss, `spc.cpuRegs[${i}]`, v));
   (spc.output_reg ?? []).forEach((v, i) => mssAddU8(mss, `spc.outputReg[${i}]`, v));
   (spc.ram_reg ?? []).forEach((v, i) => mssAddU8(mss, `spc.ramReg[${i}]`, v));
+  if ((spc.cpu_regs ?? []).length) mssAdd(mss, 'spc.newCpuRegs', Uint8Array.from(spc.cpu_regs ?? []));
   if (spc.cycle != null) mssAddU64(mss, 'spc.cycle', spc.cycle);
   (spc.timers ?? []).forEach((t, i) => writeSpcTimer(mss, `spc.timer${i}.`, t));
 }
@@ -972,7 +977,10 @@ export function portableToSetState(state: RhState1): Record<string, number | boo
     b('spc.timersDisabled', spc.timers_disabled ?? 0);
     n('spc.internalSpeed', spc.internal_speed);
     n('spc.externalSpeed', spc.external_speed);
-    n('spc.cycle', spc.cycle);
+    n('spc.stopState', 0);
+    // Do not set spc.cycle here. Captured cycle is often slightly ahead of
+    // masterClock*clockRatio, and setState runs after load's UpdateClockRatio
+    // snap — leaving the SPC permanently skipped in Spc::Run().
     (spc.cpu_regs ?? []).forEach((v, i) => n(`spc.cpuRegs[${i}]`, v));
     (spc.output_reg ?? []).forEach((v, i) => n(`spc.outputReg[${i}]`, v));
     (spc.ram_reg ?? []).forEach((v, i) => n(`spc.ramReg[${i}]`, v));

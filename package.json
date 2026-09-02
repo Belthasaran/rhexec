@@ -1,6 +1,6 @@
 {
   "name": "rhexec",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "description": "Proof-of-concept SNES execution-state capture and playback CLIs (RHSTATE1)",
   "type": "module",

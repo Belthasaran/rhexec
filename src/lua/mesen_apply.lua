@@ -119,6 +119,26 @@ local function on_exec()
   if SETSTATE and emu.setState then
     pcall(function() emu.setState(SETSTATE) end)
   end
+  -- Captured spc.cycle is often a few thousand ticks ahead of
+  -- masterClock*(sampleRate*64/clockRate). Spc::Run() then never executes.
+  -- Snap just behind the scheduler (32000 Hz underestimates Mesen's +40 tweak).
+  if emu.getState and emu.setState then
+    local okst, st = pcall(emu.getState)
+    if okst and type(st) == "table" then
+      local master = st["memoryManager.masterClock"] or st["masterClock"]
+      local rate = st["clockRate"]
+      if type(master) == "number" and type(rate) == "number" and rate > 0 then
+        local target = math.floor(master * (32000 * 64) / rate) - 64
+        if target < 0 then target = 0 end
+        pcall(function() emu.setState({ ["spc.cycle"] = target }) end)
+      end
+    end
+  end
+  -- Lua spcDspRegisters writes go through Dsp::Write (Regs + ExternalRegs + KON).
+  if DSP_PATH then
+    local mt = memtypes()
+    write_region(DSP_PATH, mt.dsp)
+  end
   -- Lua loadSavestate does not run StateLoaded, so uninit-read tracking stays
   -- at power-on. After masterClock is restored, reset so Mesen stops logging
   -- every WRAM read as uninitialized.

@@ -172,6 +172,8 @@ test('apply script restores in a single cpuExec with loadSavestate', () => {
   assert.match(lua, /addMemoryCallback/);
   assert.match(lua, /setState/);
   assert.match(lua, /resetAccessCounters/);
+  assert.match(lua, /clockRate/);
+  assert.match(lua, /spc\.cycle/);
   assert.match(lua, /\["internalRegisters.enableNmi"\] = true/);
   assert.doesNotMatch(lua, /addEventCallback/);
   const execIdx = lua.indexOf('on_exec');
@@ -211,6 +213,7 @@ test('setState uses Mesen bools and clock keys', () => {
   const wram = new Uint8Array(0x20000);
   const st = makeState(wram, {
     cpu: { a: 1, x: 0, y: 0, d: 0, db: 0, p: 0, sp: 0x1ff, pc: 0x808000, e: 0, nmi_pending: 1 },
+    spc: { a: 0, x: 0, y: 0, psw: 0, sp: 0xff, pc: 0x1015, cycle: 100039290 },
     internal: {
       enable_nmi: 1, enable_v_irq: 0, enable_h_irq: 0, enable_auto_joy: 1,
       h_timer: 0, v_timer: 0, enable_fastrom: 1, io_port: 0xff, wram_port: 0,
@@ -238,6 +241,8 @@ test('setState uses Mesen bools and clock keys', () => {
   assert.equal(map['memoryManager.masterClock'], 123456);
   assert.equal(map['ppu.layers[0].tilemapAddress'], 0x800);
   assert.equal(map['ppu.forcedBlank'], false);
+  assert.equal(map['spc.cycle'], undefined);
+  assert.equal(map['spc.pc'], 0x1015);
   const lua = setStateToLua(map);
   assert.match(lua, /\["cpu.emulationMode"\] = false/);
   assert.match(lua, /\["internalRegisters.enableNmi"\] = true/);
