@@ -44,7 +44,7 @@ npm run rhcheat1-yml -- --rom <sfc> --state <rhstate1> [--out basename.yml] [--l
 
 ### rhlaunch1-mesen
 
-Technique C: launch the original ROM in Mesen and restore CPU/PPU/SPC/WRAM from `.rhstate1` in **one** `cpuExec` (`loadSavestate` of a throwaway `.mss`). `--out` is not accepted (use `rhboot1-sfc`).
+Technique C: launch the original ROM in Mesen and restore CPU/PPU/SPC/WRAM from `.rhstate1` in **one** `cpuExec` (`loadSavestate` of a throwaway `.mss`, then `setState` for clocks/HDMA). `--out` is not accepted (use `rhboot1-sfc`).
 
 ```bash
 npm run rhlaunch1-mesen -- --rom <sfc> --state <rhstate1> [--level HEX] [--ow-submap N --ow-x N --ow-y N]

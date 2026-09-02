@@ -103,12 +103,22 @@ local function on_exec()
       loaded = ok and result ~= false
     end
   end
+  -- loadSavestate of a synthesized .mss can miss keys (Mesen keeps boot values).
+  -- Always poke RAM + setState so CPU/PPU/HDMA/clocks match even if load fails
+  -- or Lua's stringstream load is a no-op.
   if not loaded then
     fallback_writes()
   elseif WRAM_PATH then
     local mt = memtypes()
     write_region(WRAM_PATH, mt.wram)
   end
+  if SETSTATE and emu.setState then
+    pcall(function() emu.setState(SETSTATE) end)
+  end
+  -- Lua loadSavestate does not run StateLoaded, so uninit-read tracking stays
+  -- at power-on. After masterClock is restored, reset so Mesen stops logging
+  -- every WRAM read as uninitialized.
+  if emu.resetAccessCounters then pcall(emu.resetAccessCounters) end
   if emu.displayMessage then
     pcall(function() emu.displayMessage("rhexec", loaded and "state loaded" or "state fallback") end)
   end

@@ -7,11 +7,13 @@ import {
   mssAddU8,
   mssAddU16,
   mssAddU32,
+  mssAddU64,
   mssBytes,
   mssGet,
   mssU8,
   mssU16,
   mssU32,
+  mssU64,
   type MssFile,
 } from './mss-format.ts';
 import { getSectionDecoded } from '../rhstate1/codec.ts';
@@ -29,6 +31,7 @@ import {
   type RhState1,
   type RhState1Section,
   type Spc700,
+  type SpcTimer,
 } from '../rhstate1/types.ts';
 
 const WRAM = 0x20000;
@@ -77,10 +80,28 @@ function u16keys(mss: MssFile, keys: string[], fallback = 0): number {
   return fallback;
 }
 
+function u64keys(mss: MssFile, keys: string[], fallback = 0): number {
+  for (const k of keys) {
+    const n = mssU64(mss, k, -1);
+    if (n >= 0 && mssGet(mss, k)) return n;
+  }
+  return fallback;
+}
+
+const NTSC_FRAME_CYCLES = 357368;
+
+function defaultMasterClock(state: RhState1): number {
+  const have = state.internal?.master_clock;
+  if (have != null && have >= 1000) return have;
+  const frame = Number(state.trigger.frame) || 1;
+  return Math.max(10_000, frame * NTSC_FRAME_CYCLES);
+}
+
 function readCpu(mss: MssFile, prefix: string): Cpu5A22 {
   const pc16 = u16keys(mss, [`${prefix}pc`]);
   const k = u8keys(mss, [`${prefix}k`]);
   const stop = u8keys(mss, [`${prefix}stopState`]);
+  const cycle = u64keys(mss, [`${prefix}cycleCount`]);
   return normalizeCpu({
     a: u16keys(mss, [`${prefix}a`]),
     x: u16keys(mss, [`${prefix}x`]),
@@ -94,6 +115,11 @@ function readCpu(mss: MssFile, prefix: string): Cpu5A22 {
     waiting: stop === STOP_WAIT ? 1 : 0,
     nmi_pending: u8keys(mss, [`${prefix}needNmi`]),
     irq_pending: u8keys(mss, [`${prefix}irqSource`]) ? 1 : 0,
+    cycle_count: cycle || undefined,
+    nmi_flag_counter: u8keys(mss, [`${prefix}nmiFlagCounter`]),
+    irq_lock: u8keys(mss, [`${prefix}irqLock`]),
+    wai_over: u8keys(mss, [`${prefix}waiOver`]),
+    prev_irq: u8keys(mss, [`${prefix}prevIrqSource`]),
   });
 }
 
@@ -111,26 +137,32 @@ function writeCpu(mss: MssFile, prefix: string, cpu: Cpu5A22): void {
   mssAddU8(mss, `${prefix}stopState`, cpu.waiting ? STOP_WAIT : 0);
   mssAddBool(mss, `${prefix}needNmi`, cpu.nmi_pending ?? 0);
   mssAddU8(mss, `${prefix}irqSource`, cpu.irq_pending ? 1 : 0);
+  mssAddU64(mss, `${prefix}cycleCount`, cpu.cycle_count ?? 0);
+  if (cpu.nmi_flag_counter != null) mssAddU8(mss, `${prefix}nmiFlagCounter`, cpu.nmi_flag_counter);
+  if (cpu.irq_lock != null) mssAddBool(mss, `${prefix}irqLock`, cpu.irq_lock);
+  if (cpu.wai_over != null) mssAddBool(mss, `${prefix}waiOver`, cpu.wai_over);
+  if (cpu.prev_irq != null) mssAddU8(mss, `${prefix}prevIrqSource`, cpu.prev_irq);
 }
 
 function readPpu(mss: MssFile): PpuState {
   const layers: PpuLayer[] = [];
   for (let i = 0; i < 4; i += 1) {
+    const p = `ppu.layers[${i}].`;
     layers.push({
-      tilemap_address: mssU16(mss, `ppu.layers[${i}].TilemapAddress`),
-      chr_address: mssU16(mss, `ppu.layers[${i}].ChrAddress`),
-      hscroll: mssU16(mss, `ppu.layers[${i}].HScroll`),
-      vscroll: mssU16(mss, `ppu.layers[${i}].VScroll`),
-      double_width: mssU8(mss, `ppu.layers[${i}].DoubleWidth`),
-      double_height: mssU8(mss, `ppu.layers[${i}].DoubleHeight`),
-      large_tiles: mssU8(mss, `ppu.layers[${i}].LargeTiles`),
+      tilemap_address: u16keys(mss, [`${p}tilemapAddress`, `${p}TilemapAddress`]),
+      chr_address: u16keys(mss, [`${p}chrAddress`, `${p}ChrAddress`]),
+      hscroll: u16keys(mss, [`${p}hscroll`, `${p}HScroll`]),
+      vscroll: u16keys(mss, [`${p}vscroll`, `${p}VScroll`]),
+      double_width: u8keys(mss, [`${p}doubleWidth`, `${p}DoubleWidth`]),
+      double_height: u8keys(mss, [`${p}doubleHeight`, `${p}DoubleHeight`]),
+      large_tiles: u8keys(mss, [`${p}largeTiles`, `${p}LargeTiles`]),
     });
   }
   const matrix = [
-    mssU16(mss, 'ppu.mode7.Matrix[0]'),
-    mssU16(mss, 'ppu.mode7.Matrix[1]'),
-    mssU16(mss, 'ppu.mode7.Matrix[2]'),
-    mssU16(mss, 'ppu.mode7.Matrix[3]'),
+    u16keys(mss, ['ppu.mode7.matrix[0]', 'ppu.mode7.Matrix[0]']),
+    u16keys(mss, ['ppu.mode7.matrix[1]', 'ppu.mode7.Matrix[1]']),
+    u16keys(mss, ['ppu.mode7.matrix[2]', 'ppu.mode7.Matrix[2]']),
+    u16keys(mss, ['ppu.mode7.matrix[3]', 'ppu.mode7.Matrix[3]']),
   ];
   return {
     forced_blank: mssU8(mss, 'ppu.forcedBlank'),
@@ -166,18 +198,23 @@ function readPpu(mss: MssFile): PpuState {
     fixed_color: mssU16(mss, 'ppu.fixedColor'),
     layers,
     mode7_matrix: matrix,
-    mode7_center_x: mssU16(mss, 'ppu.mode7.CenterX'),
-    mode7_center_y: mssU16(mss, 'ppu.mode7.CenterY'),
-    mode7_hscroll: mssU16(mss, 'ppu.mode7.HScroll'),
-    mode7_vscroll: mssU16(mss, 'ppu.mode7.VScroll'),
-    mode7_hflip: mssU8(mss, 'ppu.mode7.HorizontalMirroring'),
-    mode7_vflip: mssU8(mss, 'ppu.mode7.VerticalMirroring'),
-    mode7_fill0: mssU8(mss, 'ppu.mode7.FillWithTile0'),
-    mode7_large: mssU8(mss, 'ppu.mode7.LargeMap'),
-    window0_left: mssU8(mss, 'ppu.window[0].Left'),
-    window0_right: mssU8(mss, 'ppu.window[0].Right'),
-    window1_left: mssU8(mss, 'ppu.window[1].Left'),
-    window1_right: mssU8(mss, 'ppu.window[1].Right'),
+    mode7_center_x: u16keys(mss, ['ppu.mode7.centerX', 'ppu.mode7.CenterX']),
+    mode7_center_y: u16keys(mss, ['ppu.mode7.centerY', 'ppu.mode7.CenterY']),
+    mode7_hscroll: u16keys(mss, ['ppu.mode7.hscroll', 'ppu.mode7.HScroll']),
+    mode7_vscroll: u16keys(mss, ['ppu.mode7.vscroll', 'ppu.mode7.VScroll']),
+    mode7_hflip: u8keys(mss, ['ppu.mode7.horizontalMirroring', 'ppu.mode7.HorizontalMirroring']),
+    mode7_vflip: u8keys(mss, ['ppu.mode7.verticalMirroring', 'ppu.mode7.VerticalMirroring']),
+    mode7_fill0: u8keys(mss, ['ppu.mode7.fillWithTile0', 'ppu.mode7.FillWithTile0']),
+    mode7_large: u8keys(mss, ['ppu.mode7.largeMap', 'ppu.mode7.LargeMap']),
+    window0_left: u8keys(mss, ['ppu.window[0].left', 'ppu.window[0].Left']),
+    window0_right: u8keys(mss, ['ppu.window[0].right', 'ppu.window[0].Right']),
+    window1_left: u8keys(mss, ['ppu.window[1].left', 'ppu.window[1].Left']),
+    window1_right: u8keys(mss, ['ppu.window[1].right', 'ppu.window[1].Right']),
+    scanline: mssU16(mss, 'ppu.scanline'),
+    frame_count: mssU32(mss, 'ppu.frameCount'),
+    horizontal_location: mssU16(mss, 'ppu.horizontalLocation'),
+    vertical_location: mssU16(mss, 'ppu.verticalLocation'),
+    odd_frame: mssU8(mss, 'ppu.oddFrame'),
   };
 }
 
@@ -219,28 +256,33 @@ function writePpu(mss: MssFile, ppu: PpuState): void {
       tilemap_address: 0, chr_address: 0, hscroll: 0, vscroll: 0,
       double_width: 0, double_height: 0, large_tiles: 0,
     };
-    mssAddU16(mss, `ppu.layers[${i}].TilemapAddress`, L.tilemap_address);
-    mssAddU16(mss, `ppu.layers[${i}].ChrAddress`, L.chr_address);
-    mssAddU16(mss, `ppu.layers[${i}].HScroll`, L.hscroll);
-    mssAddU16(mss, `ppu.layers[${i}].VScroll`, L.vscroll);
-    mssAddBool(mss, `ppu.layers[${i}].DoubleWidth`, L.double_width);
-    mssAddBool(mss, `ppu.layers[${i}].DoubleHeight`, L.double_height);
-    mssAddBool(mss, `ppu.layers[${i}].LargeTiles`, L.large_tiles);
+    mssAddU16(mss, `ppu.layers[${i}].tilemapAddress`, L.tilemap_address);
+    mssAddU16(mss, `ppu.layers[${i}].chrAddress`, L.chr_address);
+    mssAddU16(mss, `ppu.layers[${i}].hscroll`, L.hscroll);
+    mssAddU16(mss, `ppu.layers[${i}].vscroll`, L.vscroll);
+    mssAddBool(mss, `ppu.layers[${i}].doubleWidth`, L.double_width);
+    mssAddBool(mss, `ppu.layers[${i}].doubleHeight`, L.double_height);
+    mssAddBool(mss, `ppu.layers[${i}].largeTiles`, L.large_tiles);
   }
   const m = ppu.mode7_matrix ?? [0, 0, 0, 0];
-  for (let i = 0; i < 4; i += 1) mssAddS16(mss, `ppu.mode7.Matrix[${i}]`, m[i] ?? 0);
-  mssAddU16(mss, 'ppu.mode7.CenterX', ppu.mode7_center_x ?? 0);
-  mssAddU16(mss, 'ppu.mode7.CenterY', ppu.mode7_center_y ?? 0);
-  mssAddU16(mss, 'ppu.mode7.HScroll', ppu.mode7_hscroll ?? 0);
-  mssAddU16(mss, 'ppu.mode7.VScroll', ppu.mode7_vscroll ?? 0);
-  mssAddBool(mss, 'ppu.mode7.HorizontalMirroring', ppu.mode7_hflip ?? 0);
-  mssAddBool(mss, 'ppu.mode7.VerticalMirroring', ppu.mode7_vflip ?? 0);
-  mssAddBool(mss, 'ppu.mode7.FillWithTile0', ppu.mode7_fill0 ?? 0);
-  mssAddBool(mss, 'ppu.mode7.LargeMap', ppu.mode7_large ?? 0);
-  mssAddU8(mss, 'ppu.window[0].Left', ppu.window0_left ?? 0);
-  mssAddU8(mss, 'ppu.window[0].Right', ppu.window0_right ?? 0);
-  mssAddU8(mss, 'ppu.window[1].Left', ppu.window1_left ?? 0);
-  mssAddU8(mss, 'ppu.window[1].Right', ppu.window1_right ?? 0);
+  for (let i = 0; i < 4; i += 1) mssAddS16(mss, `ppu.mode7.matrix[${i}]`, m[i] ?? 0);
+  mssAddU16(mss, 'ppu.mode7.centerX', ppu.mode7_center_x ?? 0);
+  mssAddU16(mss, 'ppu.mode7.centerY', ppu.mode7_center_y ?? 0);
+  mssAddU16(mss, 'ppu.mode7.hscroll', ppu.mode7_hscroll ?? 0);
+  mssAddU16(mss, 'ppu.mode7.vscroll', ppu.mode7_vscroll ?? 0);
+  mssAddBool(mss, 'ppu.mode7.horizontalMirroring', ppu.mode7_hflip ?? 0);
+  mssAddBool(mss, 'ppu.mode7.verticalMirroring', ppu.mode7_vflip ?? 0);
+  mssAddBool(mss, 'ppu.mode7.fillWithTile0', ppu.mode7_fill0 ?? 0);
+  mssAddBool(mss, 'ppu.mode7.largeMap', ppu.mode7_large ?? 0);
+  mssAddU8(mss, 'ppu.window[0].left', ppu.window0_left ?? 0);
+  mssAddU8(mss, 'ppu.window[0].right', ppu.window0_right ?? 0);
+  mssAddU8(mss, 'ppu.window[1].left', ppu.window1_left ?? 0);
+  mssAddU8(mss, 'ppu.window[1].right', ppu.window1_right ?? 0);
+  if (ppu.scanline != null) mssAddU16(mss, 'ppu.scanline', ppu.scanline);
+  if (ppu.frame_count != null) mssAddU32(mss, 'ppu.frameCount', ppu.frame_count);
+  if (ppu.horizontal_location != null) mssAddU16(mss, 'ppu.horizontalLocation', ppu.horizontal_location);
+  if (ppu.vertical_location != null) mssAddU16(mss, 'ppu.verticalLocation', ppu.vertical_location);
+  if (ppu.odd_frame != null) mssAddBool(mss, 'ppu.oddFrame', ppu.odd_frame);
 }
 
 function readDma(mss: MssFile): DmaState {
@@ -248,44 +290,63 @@ function readDma(mss: MssFile): DmaState {
   for (let i = 0; i < 8; i += 1) {
     const p = `dmaController.channel[${i}].`;
     channels.push({
-      invert_direction: mssU8(mss, `${p}InvertDirection`),
-      hdma_indirect: mssU8(mss, `${p}HdmaIndirectAddressing`),
-      unused_43x0: mssU8(mss, `${p}UnusedControlFlag`),
-      fixed_transfer: mssU8(mss, `${p}FixedTransfer`),
-      decrement: mssU8(mss, `${p}Decrement`),
-      transfer_mode: mssU8(mss, `${p}TransferMode`),
-      dest: mssU8(mss, `${p}DestAddress`),
-      src_address: mssU16(mss, `${p}SrcAddress`),
-      src_bank: mssU8(mss, `${p}SrcBank`),
-      transfer_size: mssU16(mss, `${p}TransferSize`),
-      hdma_bank: mssU8(mss, `${p}HdmaBank`),
-      hdma_table: mssU16(mss, `${p}HdmaTableAddress`),
-      hdma_line: mssU8(mss, `${p}HdmaLineCounterAndRepeat`),
-      do_transfer: mssU8(mss, `${p}DoTransfer`),
+      invert_direction: u8keys(mss, [`${p}invertDirection`, `${p}InvertDirection`]),
+      hdma_indirect: u8keys(mss, [`${p}hdmaIndirectAddressing`, `${p}HdmaIndirectAddressing`]),
+      unused_43x0: u8keys(mss, [`${p}unusedControlFlag`, `${p}UnusedControlFlag`]),
+      fixed_transfer: u8keys(mss, [`${p}fixedTransfer`, `${p}FixedTransfer`]),
+      decrement: u8keys(mss, [`${p}decrement`, `${p}Decrement`]),
+      transfer_mode: u8keys(mss, [`${p}transferMode`, `${p}TransferMode`]),
+      dest: u8keys(mss, [`${p}destAddress`, `${p}DestAddress`]),
+      src_address: u16keys(mss, [`${p}srcAddress`, `${p}SrcAddress`]),
+      src_bank: u8keys(mss, [`${p}srcBank`, `${p}SrcBank`]),
+      transfer_size: u16keys(mss, [`${p}transferSize`, `${p}TransferSize`]),
+      hdma_bank: u8keys(mss, [`${p}hdmaBank`, `${p}HdmaBank`]),
+      hdma_table: u16keys(mss, [`${p}hdmaTableAddress`, `${p}HdmaTableAddress`]),
+      hdma_line: u8keys(mss, [`${p}hdmaLineCounterAndRepeat`, `${p}HdmaLineCounterAndRepeat`]),
+      do_transfer: u8keys(mss, [`${p}doTransfer`, `${p}DoTransfer`]),
+      hdma_finished: u8keys(mss, [`${p}hdmaFinished`, `${p}HdmaFinished`]),
+      dma_active: u8keys(mss, [`${p}dmaActive`, `${p}DmaActive`]),
     });
   }
-  return { hdma_channels: mssU8(mss, 'dmaController.hdmaChannels'), channels };
+  return {
+    hdma_channels: mssU8(mss, 'dmaController.hdmaChannels'),
+    channels,
+    hdma_pending: mssU8(mss, 'dmaController.hdmaPending'),
+    dma_pending: mssU8(mss, 'dmaController.dmaPending'),
+    hdma_init_pending: mssU8(mss, 'dmaController.hdmaInitPending'),
+    need_to_process: mssU8(mss, 'dmaController.needToProcess'),
+    dma_clock_counter: mssU32(mss, 'dmaController.dmaClockCounter'),
+    dma_start_delay: mssU8(mss, 'dmaController.dmaStartDelay'),
+  };
 }
 
 function writeDma(mss: MssFile, dma: DmaState): void {
   mssAddU8(mss, 'dmaController.hdmaChannels', dma.hdma_channels);
+  if (dma.hdma_pending != null) mssAddBool(mss, 'dmaController.hdmaPending', dma.hdma_pending);
+  if (dma.dma_pending != null) mssAddBool(mss, 'dmaController.dmaPending', dma.dma_pending);
+  if (dma.hdma_init_pending != null) mssAddBool(mss, 'dmaController.hdmaInitPending', dma.hdma_init_pending);
+  if (dma.need_to_process != null) mssAddBool(mss, 'dmaController.needToProcess', dma.need_to_process);
+  if (dma.dma_clock_counter != null) mssAddU32(mss, 'dmaController.dmaClockCounter', dma.dma_clock_counter);
+  if (dma.dma_start_delay != null) mssAddBool(mss, 'dmaController.dmaStartDelay', dma.dma_start_delay);
   for (let i = 0; i < 8; i += 1) {
     const ch = dma.channels[i] ?? emptyDmaChannel();
     const p = `dmaController.channel[${i}].`;
-    mssAddBool(mss, `${p}InvertDirection`, ch.invert_direction);
-    mssAddBool(mss, `${p}HdmaIndirectAddressing`, ch.hdma_indirect);
-    mssAddBool(mss, `${p}UnusedControlFlag`, ch.unused_43x0);
-    mssAddBool(mss, `${p}FixedTransfer`, ch.fixed_transfer);
-    mssAddBool(mss, `${p}Decrement`, ch.decrement);
-    mssAddU8(mss, `${p}TransferMode`, ch.transfer_mode);
-    mssAddU8(mss, `${p}DestAddress`, ch.dest);
-    mssAddU16(mss, `${p}SrcAddress`, ch.src_address);
-    mssAddU8(mss, `${p}SrcBank`, ch.src_bank);
-    mssAddU16(mss, `${p}TransferSize`, ch.transfer_size);
-    mssAddU8(mss, `${p}HdmaBank`, ch.hdma_bank);
-    mssAddU16(mss, `${p}HdmaTableAddress`, ch.hdma_table);
-    mssAddU8(mss, `${p}HdmaLineCounterAndRepeat`, ch.hdma_line);
-    mssAddBool(mss, `${p}DoTransfer`, ch.do_transfer);
+    mssAddBool(mss, `${p}invertDirection`, ch.invert_direction);
+    mssAddBool(mss, `${p}hdmaIndirectAddressing`, ch.hdma_indirect);
+    mssAddBool(mss, `${p}unusedControlFlag`, ch.unused_43x0);
+    mssAddBool(mss, `${p}fixedTransfer`, ch.fixed_transfer);
+    mssAddBool(mss, `${p}decrement`, ch.decrement);
+    mssAddU8(mss, `${p}transferMode`, ch.transfer_mode);
+    mssAddU8(mss, `${p}destAddress`, ch.dest);
+    mssAddU16(mss, `${p}srcAddress`, ch.src_address);
+    mssAddU8(mss, `${p}srcBank`, ch.src_bank);
+    mssAddU16(mss, `${p}transferSize`, ch.transfer_size);
+    mssAddU8(mss, `${p}hdmaBank`, ch.hdma_bank);
+    mssAddU16(mss, `${p}hdmaTableAddress`, ch.hdma_table);
+    mssAddU8(mss, `${p}hdmaLineCounterAndRepeat`, ch.hdma_line);
+    mssAddBool(mss, `${p}doTransfer`, ch.do_transfer);
+    if (ch.hdma_finished != null) mssAddBool(mss, `${p}hdmaFinished`, ch.hdma_finished);
+    if (ch.dma_active != null) mssAddBool(mss, `${p}dmaActive`, ch.dma_active);
   }
 }
 
@@ -306,6 +367,15 @@ function readInternal(mss: MssFile): InternalRegs {
     mul_b: mssU8(mss, 'internalRegisters.aluMulDiv.multOperand2'),
     dividend: mssU16(mss, 'internalRegisters.aluMulDiv.dividend'),
     divisor: mssU8(mss, 'internalRegisters.aluMulDiv.divisor'),
+    master_clock: mssU64(mss, 'memoryManager.masterClock') || undefined,
+    hclock: mssU16(mss, 'memoryManager.hClock'),
+    next_event: mssU8(mss, 'memoryManager.nextEvent'),
+    next_event_clock: mssU16(mss, 'memoryManager.nextEventClock'),
+    dram_refresh: mssU16(mss, 'memoryManager.dramRefreshPosition'),
+    cpu_speed: mssU8(mss, 'memoryManager.cpuSpeed'),
+    open_bus: mssU8(mss, 'memoryManager.openBus'),
+    irq_level: mssU8(mss, 'internalRegisters.irqLevel'),
+    need_irq: mssU8(mss, 'internalRegisters.needIrq'),
   };
 }
 
@@ -325,9 +395,44 @@ function writeInternal(mss: MssFile, ir: InternalRegs): void {
   if (ir.mul_b != null) mssAddU8(mss, 'internalRegisters.aluMulDiv.multOperand2', ir.mul_b);
   if (ir.dividend != null) mssAddU16(mss, 'internalRegisters.aluMulDiv.dividend', ir.dividend);
   if (ir.divisor != null) mssAddU8(mss, 'internalRegisters.aluMulDiv.divisor', ir.divisor);
+  mssAddU64(mss, 'memoryManager.masterClock', ir.master_clock ?? 0);
+  if (ir.hclock != null) mssAddU16(mss, 'memoryManager.hClock', ir.hclock);
+  if (ir.next_event != null) mssAddU8(mss, 'memoryManager.nextEvent', ir.next_event);
+  if (ir.next_event_clock != null) mssAddU16(mss, 'memoryManager.nextEventClock', ir.next_event_clock);
+  if (ir.dram_refresh != null) mssAddU16(mss, 'memoryManager.dramRefreshPosition', ir.dram_refresh);
+  if (ir.cpu_speed != null) mssAddU8(mss, 'memoryManager.cpuSpeed', ir.cpu_speed);
+  if (ir.open_bus != null) mssAddU8(mss, 'memoryManager.openBus', ir.open_bus);
+  if (ir.irq_level != null) mssAddBool(mss, 'internalRegisters.irqLevel', ir.irq_level);
+  if (ir.need_irq != null) mssAddBool(mss, 'internalRegisters.needIrq', ir.need_irq);
+}
+
+function readSpcTimer(mss: MssFile, prefix: string): SpcTimer {
+  return {
+    stage0: mssU8(mss, `${prefix}stage0`),
+    stage1: mssU8(mss, `${prefix}stage1`),
+    stage2: mssU8(mss, `${prefix}stage2`),
+    output: mssU8(mss, `${prefix}output`),
+    target: mssU8(mss, `${prefix}target`),
+    enabled: mssU8(mss, `${prefix}enabled`),
+    timers_enabled: mssU8(mss, `${prefix}timersEnabled`),
+    prev_stage1: mssU8(mss, `${prefix}prevStage1`),
+  };
+}
+
+function writeSpcTimer(mss: MssFile, prefix: string, t: SpcTimer): void {
+  mssAddU8(mss, `${prefix}stage0`, t.stage0);
+  mssAddU8(mss, `${prefix}stage1`, t.stage1);
+  mssAddU8(mss, `${prefix}stage2`, t.stage2);
+  mssAddU8(mss, `${prefix}output`, t.output);
+  mssAddU8(mss, `${prefix}target`, t.target);
+  mssAddBool(mss, `${prefix}enabled`, t.enabled);
+  mssAddBool(mss, `${prefix}timersEnabled`, t.timers_enabled);
+  mssAddU8(mss, `${prefix}prevStage1`, t.prev_stage1);
 }
 
 function readSpc(mss: MssFile): Spc700 {
+  const timers = [0, 1, 2].map((i) => readSpcTimer(mss, `spc.timer${i}.`));
+  const hasTimers = mssGet(mss, 'spc.timer0.stage0') || mssGet(mss, 'spc.timer0.target');
   return {
     a: mssU8(mss, 'spc.a'),
     x: mssU8(mss, 'spc.x'),
@@ -340,6 +445,8 @@ function readSpc(mss: MssFile): Spc700 {
     timers_enabled: mssU8(mss, 'spc.timersEnabled'),
     cpu_regs: [0, 1, 2, 3].map((i) => mssU8(mss, `spc.cpuRegs[${i}]`)),
     output_reg: [0, 1, 2, 3].map((i) => mssU8(mss, `spc.outputReg[${i}]`)),
+    cycle: u64keys(mss, ['spc.cycle']) || undefined,
+    timers: hasTimers ? timers : undefined,
   };
 }
 
@@ -355,6 +462,8 @@ function writeSpc(mss: MssFile, spc: Spc700): void {
   if (spc.timers_enabled != null) mssAddBool(mss, 'spc.timersEnabled', spc.timers_enabled);
   (spc.cpu_regs ?? []).forEach((v, i) => mssAddU8(mss, `spc.cpuRegs[${i}]`, v));
   (spc.output_reg ?? []).forEach((v, i) => mssAddU8(mss, `spc.outputReg[${i}]`, v));
+  if (spc.cycle != null) mssAddU64(mss, 'spc.cycle', spc.cycle);
+  (spc.timers ?? []).forEach((t, i) => writeSpcTimer(mss, `spc.timer${i}.`, t));
 }
 
 function readVoices(mss: MssFile): DspVoice[] | undefined {
@@ -525,8 +634,8 @@ export function mssToPortable(mss: MssFile, opts: MssToPortableOpts): RhState1 {
     ? { cpu: readCpu(mss, mssGet(mss, 'cart.sa1.cpu.a') ? 'cart.sa1.cpu.' : 'cart.coprocessor.cpu.') }
     : undefined;
 
-  const scanline = mssU16(mss, 'ppu.scanline');
-  const hclock = mssU16(mss, 'memoryManager.hClock');
+  const scanline = ppu.scanline ?? mssU16(mss, 'ppu.scanline');
+  const hclock = internal.hclock ?? mssU16(mss, 'memoryManager.hClock');
 
   const state: RhState1 = {
     v: RHSTATE1_VERSION,
@@ -556,10 +665,38 @@ export function mssToPortable(mss: MssFile, opts: MssToPortableOpts): RhState1 {
 
 export function portableToMss(state: RhState1, romName: string): MssFile {
   const mss = createEmptyMss(romName);
-  writeCpu(mss, 'cpu.', state.cpu);
-  if (state.ppu) writePpu(mss, state.ppu);
+  const master = defaultMasterClock(state);
+  const cpu: Cpu5A22 = {
+    ...state.cpu,
+    cycle_count: state.cpu.cycle_count && state.cpu.cycle_count > 0 ? state.cpu.cycle_count : master,
+  };
+  writeCpu(mss, 'cpu.', cpu);
+
+  const ppu = state.ppu
+    ? {
+      ...state.ppu,
+      scanline: state.ppu.scanline ?? state.trigger.scanline,
+      frame_count: state.ppu.frame_count ?? state.trigger.frame,
+    }
+    : undefined;
+  if (ppu) writePpu(mss, ppu);
   if (state.dma) writeDma(mss, state.dma);
-  if (state.internal) writeInternal(mss, state.internal);
+
+  const ir: InternalRegs = {
+    enable_nmi: state.internal?.enable_nmi ?? 1,
+    enable_v_irq: state.internal?.enable_v_irq ?? 0,
+    enable_h_irq: state.internal?.enable_h_irq ?? 0,
+    enable_auto_joy: state.internal?.enable_auto_joy ?? 1,
+    h_timer: state.internal?.h_timer ?? 0,
+    v_timer: state.internal?.v_timer ?? 0,
+    enable_fastrom: state.internal?.enable_fastrom ?? 1,
+    io_port: state.internal?.io_port ?? 0xff,
+    wram_port: state.internal?.wram_port ?? 0,
+    ...state.internal,
+    master_clock: master,
+    hclock: state.internal?.hclock ?? state.trigger.hclock ?? 0,
+  };
+  writeInternal(mss, ir);
   if (state.spc) writeSpc(mss, state.spc);
   if (state.dsp_voices) writeVoices(mss, state.dsp_voices);
   if (state.sa1) writeCpu(mss, 'cart.coprocessor.cpu.', state.sa1.cpu);
@@ -588,6 +725,138 @@ export function portableToMss(state: RhState1, romName: string): MssFile {
 
 export function encodePortableAsMss(state: RhState1, romName: string): Buffer {
   return encodeMss(portableToMss(state, romName));
+}
+
+function flag(v: number | undefined | null): boolean {
+  return !!(v && v !== 0);
+}
+
+/** Lua `emu.setState` map: Mesen bool fields must be real booleans, not 0/1. */
+export function portableToSetState(state: RhState1): Record<string, number | boolean> {
+  const o: Record<string, number | boolean> = {};
+  const n = (k: string, v: number | undefined | null) => {
+    if (v == null || Number.isNaN(Number(v))) return;
+    o[k] = Number(v);
+  };
+  const b = (k: string, v: number | boolean | undefined | null) => {
+    if (v == null) return;
+    o[k] = typeof v === 'boolean' ? v : flag(v);
+  };
+  const cpu = state.cpu;
+  n('cpu.a', cpu.a);
+  n('cpu.x', cpu.x);
+  n('cpu.y', cpu.y);
+  n('cpu.d', cpu.d);
+  n('cpu.dbr', cpu.db);
+  n('cpu.ps', cpu.p);
+  n('cpu.sp', cpu.sp);
+  n('cpu.pc', cpu.pc & 0xffff);
+  n('cpu.k', (cpu.pc >>> 16) & 0xff);
+  b('cpu.emulationMode', cpu.e);
+  n('cpu.stopState', cpu.waiting ? STOP_WAIT : 0);
+  b('cpu.needNmi', cpu.nmi_pending);
+  n('cpu.irqSource', cpu.irq_pending ? 1 : 0);
+  n('cpu.cycleCount', cpu.cycle_count && cpu.cycle_count > 0 ? cpu.cycle_count : defaultMasterClock(state));
+  n('cpu.nmiFlagCounter', cpu.nmi_flag_counter);
+  b('cpu.irqLock', cpu.irq_lock);
+  b('cpu.waiOver', cpu.wai_over);
+  n('cpu.prevIrqSource', cpu.prev_irq);
+
+  const ppu = state.ppu;
+  if (ppu) {
+    b('ppu.forcedBlank', ppu.forced_blank);
+    n('ppu.screenBrightness', ppu.brightness);
+    n('ppu.bgMode', ppu.bgmode);
+    b('ppu.mode1Bg3Priority', ppu.mode1_bg3_priority);
+    n('ppu.mainScreenLayers', ppu.main_screen_layers);
+    n('ppu.subScreenLayers', ppu.sub_screen_layers);
+    n('ppu.cgramAddress', ppu.cgram_address);
+    n('ppu.vramAddress', ppu.vram_address);
+    n('ppu.vramIncrementValue', ppu.vram_increment);
+    n('ppu.oamMode', ppu.oam_mode);
+    n('ppu.oamBaseAddress', ppu.oam_base);
+    n('ppu.oamRamAddress', ppu.oam_addr);
+    b('ppu.enableOamPriority', ppu.oam_priority);
+    b('ppu.hiResMode', ppu.hi_res);
+    n('ppu.colorMathEnabled', ppu.color_math_enabled);
+    n('ppu.fixedColor', ppu.fixed_color);
+    n('ppu.scanline', ppu.scanline ?? state.trigger.scanline);
+    n('ppu.frameCount', ppu.frame_count ?? state.trigger.frame);
+    (ppu.layers ?? []).forEach((L, i) => {
+      n(`ppu.layers[${i}].tilemapAddress`, L.tilemap_address);
+      n(`ppu.layers[${i}].chrAddress`, L.chr_address);
+      n(`ppu.layers[${i}].hscroll`, L.hscroll);
+      n(`ppu.layers[${i}].vscroll`, L.vscroll);
+      b(`ppu.layers[${i}].doubleWidth`, L.double_width);
+      b(`ppu.layers[${i}].doubleHeight`, L.double_height);
+      b(`ppu.layers[${i}].largeTiles`, L.large_tiles);
+    });
+  }
+
+  const dma = state.dma;
+  if (dma) {
+    n('dmaController.hdmaChannels', dma.hdma_channels);
+    b('dmaController.hdmaPending', dma.hdma_pending);
+    b('dmaController.dmaPending', dma.dma_pending);
+    b('dmaController.hdmaInitPending', dma.hdma_init_pending);
+    b('dmaController.needToProcess', dma.need_to_process);
+    dma.channels.forEach((ch, i) => {
+      const p = `dmaController.channel[${i}].`;
+      b(`${p}invertDirection`, ch.invert_direction);
+      b(`${p}hdmaIndirectAddressing`, ch.hdma_indirect);
+      b(`${p}fixedTransfer`, ch.fixed_transfer);
+      b(`${p}decrement`, ch.decrement);
+      n(`${p}transferMode`, ch.transfer_mode);
+      n(`${p}destAddress`, ch.dest);
+      n(`${p}srcAddress`, ch.src_address);
+      n(`${p}srcBank`, ch.src_bank);
+      n(`${p}transferSize`, ch.transfer_size);
+      n(`${p}hdmaBank`, ch.hdma_bank);
+      n(`${p}hdmaTableAddress`, ch.hdma_table);
+      n(`${p}hdmaLineCounterAndRepeat`, ch.hdma_line);
+      b(`${p}doTransfer`, ch.do_transfer);
+    });
+  }
+
+  const ir = state.internal;
+  b('internalRegisters.enableNmi', ir?.enable_nmi ?? 1);
+  b('internalRegisters.enableVerticalIrq', ir?.enable_v_irq);
+  b('internalRegisters.enableHorizontalIrq', ir?.enable_h_irq);
+  b('internalRegisters.enableAutoJoypadRead', ir?.enable_auto_joy ?? 1);
+  b('internalRegisters.enableFastRom', ir?.enable_fastrom ?? 1);
+  n('internalRegisters.ioPortOutput', ir?.io_port ?? 0xff);
+  n('memoryManager.registerHandlerB.wramPosition', ir?.wram_port);
+  n('memoryManager.masterClock', defaultMasterClock(state));
+  n('memoryManager.hClock', ir?.hclock ?? state.trigger.hclock ?? 0);
+  n('memoryManager.nextEvent', ir?.next_event);
+  n('memoryManager.nextEventClock', ir?.next_event_clock);
+  b('internalRegisters.nmiFlag', ir?.nmi_flag);
+  b('internalRegisters.irqFlag', ir?.irq_flag);
+  b('internalRegisters.irqLevel', ir?.irq_level);
+  b('internalRegisters.needIrq', ir?.need_irq);
+
+  const spc = state.spc;
+  if (spc) {
+    n('spc.a', spc.a);
+    n('spc.x', spc.x);
+    n('spc.y', spc.y);
+    n('spc.ps', spc.psw);
+    n('spc.sp', spc.sp);
+    n('spc.pc', spc.pc);
+    n('spc.dspReg', spc.dsp_reg);
+    b('spc.romEnabled', spc.rom_enabled);
+    b('spc.timersEnabled', spc.timers_enabled);
+    n('spc.cycle', spc.cycle);
+  }
+  return o;
+}
+
+export function setStateToLua(map: Record<string, number | boolean>): string {
+  const lines = Object.entries(map).map(([k, v]) => {
+    const lit = typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v);
+    return `  [${JSON.stringify(k)}] = ${lit},`;
+  });
+  return `local SETSTATE = {\n${lines.join('\n')}\n}\n`;
 }
 
 /** Apply Mesen getState scalar keys (fallback when no .mss). Unknown keys ignored. */

@@ -39,6 +39,7 @@ export interface ApplyScriptPaths {
   sa1IramPath?: string | null;
   fillramPath?: string | null;
   cpuPath?: string | null;
+  setStateLua?: string;
 }
 
 function luaStr(v: string | null | undefined): string {
@@ -61,6 +62,7 @@ export function writeApplyScript(dumpDir: string, paths: ApplyScriptPaths): stri
     `local SA1_IRAM_PATH = ${luaStr(paths.sa1IramPath)}`,
     `local FILLRAM_PATH = ${luaStr(paths.fillramPath)}`,
     `local CPU_PATH = ${luaStr(paths.cpuPath)}`,
+    paths.setStateLua || 'local SETSTATE = nil',
     apply,
   ].join('\n');
   const out = join(dumpDir, 'rhapply1.lua');

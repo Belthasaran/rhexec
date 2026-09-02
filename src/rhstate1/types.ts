@@ -40,6 +40,12 @@ export interface Cpu5A22 {
   waiting?: number;
   nmi_pending?: number;
   irq_pending?: number;
+  /** 5A22 cycle counter (Mesen `cpu.cycleCount`). */
+  cycle_count?: number;
+  nmi_flag_counter?: number;
+  irq_lock?: number;
+  wai_over?: number;
+  prev_irq?: number;
 }
 
 export interface Spc700 {
@@ -54,6 +60,20 @@ export interface Spc700 {
   timers_enabled?: number;
   cpu_regs?: number[];
   output_reg?: number[];
+  /** SPC cycle counter (Mesen `spc.cycle`). */
+  cycle?: number;
+  timers?: SpcTimer[];
+}
+
+export interface SpcTimer {
+  stage0: number;
+  stage1: number;
+  stage2: number;
+  output: number;
+  target: number;
+  enabled: number;
+  timers_enabled: number;
+  prev_stage1: number;
 }
 
 export interface PpuLayer {
@@ -112,6 +132,12 @@ export interface PpuState {
   window0_right?: number;
   window1_left?: number;
   window1_right?: number;
+  scanline?: number;
+  frame_count?: number;
+  /** PPU beam (Mesen binary savestate; not in Lua setState). */
+  horizontal_location?: number;
+  vertical_location?: number;
+  odd_frame?: number;
 }
 
 export interface DmaChannel {
@@ -129,11 +155,19 @@ export interface DmaChannel {
   hdma_table: number;
   hdma_line: number;
   do_transfer: number;
+  hdma_finished?: number;
+  dma_active?: number;
 }
 
 export interface DmaState {
   hdma_channels: number;
   channels: DmaChannel[];
+  hdma_pending?: number;
+  dma_pending?: number;
+  hdma_init_pending?: number;
+  need_to_process?: number;
+  dma_clock_counter?: number;
+  dma_start_delay?: number;
 }
 
 export interface InternalRegs {
@@ -152,6 +186,16 @@ export interface InternalRegs {
   mul_b?: number;
   dividend?: number;
   divisor?: number;
+  /** SNES master clock. Needed so Mesen does not treat restore as power-on. */
+  master_clock?: number;
+  hclock?: number;
+  next_event?: number;
+  next_event_clock?: number;
+  dram_refresh?: number;
+  cpu_speed?: number;
+  open_bus?: number;
+  irq_level?: number;
+  need_irq?: number;
 }
 
 export interface DspVoice {
@@ -265,5 +309,10 @@ export function normalizeCpu(raw: Partial<Cpu5A22> | null | undefined): Cpu5A22 
     waiting: Number(r.waiting) || 0,
     nmi_pending: Number(r.nmi_pending) || 0,
     irq_pending: Number(r.irq_pending) || 0,
+    cycle_count: r.cycle_count != null ? Number(r.cycle_count) : undefined,
+    nmi_flag_counter: r.nmi_flag_counter != null ? Number(r.nmi_flag_counter) : undefined,
+    irq_lock: r.irq_lock != null ? Number(r.irq_lock) : undefined,
+    wai_over: r.wai_over != null ? Number(r.wai_over) : undefined,
+    prev_irq: r.prev_irq != null ? Number(r.prev_irq) : undefined,
   };
 }

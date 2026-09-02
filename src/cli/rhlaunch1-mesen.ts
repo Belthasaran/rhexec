@@ -8,7 +8,7 @@ import { decodeRhState1, getSectionDecoded } from '../rhstate1/codec.ts';
 import { applyMutations } from '../rhstate1/apply.ts';
 import { writeApplyScript } from '../capture/write-lua.ts';
 import { spawnMesen } from '../capture/mesen-spawn.ts';
-import { encodePortableAsMss } from '../players/mesen-state-map.ts';
+import { encodePortableAsMss, portableToSetState, setStateToLua } from '../players/mesen-state-map.ts';
 
 const HELP = `rhlaunch1-mesen - Technique C: launch Mesen and restore .rhstate1 atomically
 
@@ -77,6 +77,7 @@ async function main(argv: string[]): Promise<number> {
     sa1IramPath: writeBin(dir, 'sa1_iram.bin', getSectionDecoded(st, 'sa1_iram')),
     fillramPath: writeBin(dir, 'fillram.bin', getSectionDecoded(st, 'fillram')),
     cpuPath: join(dir, 'cpu.json'),
+    setStateLua: setStateToLua(portableToSetState(st)),
   });
   writeFileSync(join(dir, 'cpu.json'), JSON.stringify(st.cpu));
   const child = spawnMesen({ rom, lua });

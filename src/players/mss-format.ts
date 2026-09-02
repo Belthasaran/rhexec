@@ -160,6 +160,12 @@ export function mssAddU32(mss: MssFile, key: string, v: number): void {
   mssAdd(mss, key, wrU32le(v));
 }
 
+export function mssAddU64(mss: MssFile, key: string, v: number): void {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(BigInt(Math.max(0, Math.floor(Number(v) || 0))), 0);
+  mssAdd(mss, key, b);
+}
+
 export function mssU8(mss: MssFile, key: string, fallback = 0): number {
   const d = mss.index.get(key);
   return d && d.length >= 1 ? d[0]! : fallback;
@@ -182,6 +188,14 @@ export function mssU32(mss: MssFile, key: string, fallback = 0): number {
   const d = mss.index.get(key);
   if (!d || d.length < 4) return fallback;
   return u32le(d, 0);
+}
+
+export function mssU64(mss: MssFile, key: string, fallback = 0): number {
+  const d = mss.index.get(key);
+  if (!d) return fallback;
+  if (d.length >= 8) return Number(Buffer.from(d.subarray(0, 8)).readBigUInt64LE(0));
+  if (d.length >= 4) return u32le(d, 0);
+  return fallback;
 }
 
 export function mssBytes(mss: MssFile, key: string, want: number): Uint8Array | null {

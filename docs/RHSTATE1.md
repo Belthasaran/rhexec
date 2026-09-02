@@ -18,7 +18,7 @@ Checklist vs Snes9x v12 freeze (`snapshot.cpp`) / [s9x_mss](https://github.com/s
 | `spc` | map | SPC-700 `a,x,y,psw,sp,pc`, ports, timers, `dsp_reg`, `rom_enabled` |
 | `ppu` | map | MMIO-equivalent (forced blank, BGMODE, TM/TS, layers, Mode7, windows, VMA, OAM, color math) |
 | `dma` | map | `hdma_channels` (`$420C`) + 8 channels (`$4300–$437F` meaning) |
-| `internal` | map | `$4200` family, H/V IRQ timers, FastROM, auto-joypad, WRAM port `$2181–$2183` |
+| `internal` | map | `$4200` family, H/V IRQ timers, FastROM, auto-joypad, WRAM port `$2181–$2183`, optional `master_clock` / `hclock` (SNES scheduler) |
 | `sa1` / `gsu` | map | optional coprocessor CPU/regs |
 | `dsp_voices` | array | optional 8 DSP voice envelopes |
 | `trigger` | map | `game_mode`, `pc`, `frame`, optional `scanline`, `hclock`, `region` |
@@ -38,4 +38,4 @@ Section `id`: `wram`, `vram`, `cgram`, `oam`, `sram`, `spc_aram`, `dsp`, `fillra
 
 - `rhboot1-sfc` — embed WRAM after a reset trampoline
 - `rhcheat1-yml` — PAR8 WRAM lines
-- `rhlaunch1-mesen` — synthesize a throwaway Mesen `.mss` and `loadSavestate` in one `cpuExec` callback (emulation frozen until the callback returns)
+- `rhlaunch1-mesen` — synthesize a throwaway Mesen `.mss` and `loadSavestate` in one `cpuExec` callback, then `emu.setState` clocks/PPU/HDMA (emulation frozen until the callback returns)
