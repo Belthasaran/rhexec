@@ -24,6 +24,6 @@
         lda     #$00
         sta     $4200
         ; DMA WRAM, VRAM, CGRAM, OAM
-        ; IPL-upload ARAM and jump to captured SPC PC
-        ; poke PPU (scrolls write-twice), $4300–$437F, INIDISP, $4200
-        ; restore A,X,Y,DB,P and jml !PC
+        ; IPL-upload ARAM in 256-byte pages (IPL cannot stream 64KiB).
+; poke PPU (scrolls write-twice), $4300–$437F
+; restore A,X,Y,DB,P then INIDISP + $4200 and jml !PC

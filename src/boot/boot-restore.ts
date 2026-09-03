@@ -128,56 +128,107 @@ function packDmaRegs(state: RhState1): Uint8Array {
   return table;
 }
 
+function emitWait2140(bytes: number[], value: number): void {
+  bytes.push(0xad, 0x40, 0x21, 0xc9, u8(value), 0xd0, 0xf9);
+}
+
+function patchRel8(bytes: number[], offsetByte: number, target: number): void {
+  bytes[offsetByte] = (target - (offsetByte + 1)) & 0xff;
+}
+
+function patchRel16(bytes: number[], offsetLo: number, target: number): void {
+  const rel = (target - (offsetLo + 2)) & 0xffff;
+  bytes[offsetLo] = rel & 0xff;
+  bytes[offsetLo + 1] = (rel >> 8) & 0xff;
+}
+
+/**
+ * SPC IPL only streams until dest bit7 is set (32KiB from $0000, or 256
+ * bytes from $8000+). A single 64KiB transfer never finishes. Upload 256-byte
+ * pages; skip the APU entirely if $2140 never becomes $AA.
+ */
 function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number): void {
-  // Wait $2140=$AA / $2141=$BB (IPL ready).
-  bytes.push(
-    0xad, 0x40, 0x21,
-    0xc9, 0xaa,
-    0xd0, 0xf9,
-    0xad, 0x41, 0x21,
-    0xc9, 0xbb,
-    0xd0, 0xf2,
-  );
-  stzAbs(bytes, 0x2142);
-  stzAbs(bytes, 0x2143);
-  ldaSta(bytes, 0x01, 0x2141);
-  ldaSta(bytes, 0xcc, 0x2140);
-  bytes.push(
-    0xad, 0x40, 0x21,
-    0xc9, 0xcc,
-    0xd0, 0xf9,
-  );
-  bytes.push(0x8b); // PHB
   bytes.push(0xc2, 0x10); // REP #$10
-  bytes.push(0xa2, 0x00, 0x00); // LDX #$0000
-  for (let b = 0; b < ARAM_BANKS; b += 1) {
-    bytes.push(0xa9, u8(aramBank + b), 0x48, 0xab);
-    bytes.push(0xa0, 0x00, 0x00);
-    const loop = bytes.length;
-    bytes.push(
-      0xb9, 0x00, 0x80, // LDA $8000,Y
-      0x8d, 0x41, 0x21, // STA $2141
-      0x8a,             // TXA
-      0x8d, 0x40, 0x21, // STA $2140
-      0xcd, 0x40, 0x21, // CMP $2140
-      0xd0, 0xfb,       // BNE
-      0xe8,             // INX
-      0xc8,             // INY
-      0xc0, 0x00, 0x80, // CPY #$8000
-    );
-    const afterCpy = bytes.length;
-    bytes.push(0xd0, (loop - (afterCpy + 2)) & 0xff);
-  }
-  bytes.push(0xab); // PLB
+  bytes.push(0xa0, 0x20, 0x00); // LDY #$0020 timeout outer
+  const outer = bytes.length;
+  bytes.push(0xa2, 0x00, 0x00); // LDX #0
+  const inner = bytes.length;
+  bytes.push(0xad, 0x40, 0x21, 0xc9, 0xaa);
+  const beqGot = bytes.length;
+  bytes.push(0xf0, 0x00); // BEQ got
+  bytes.push(0xca); // DEX
+  const bneInner = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE inner
+  bytes.push(0x88); // DEY
+  const bneOuter = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE outer
+  const brlSkip = bytes.length;
+  bytes.push(0x82, 0x00, 0x00); // BRL skip
+  const got = bytes.length;
+  patchRel8(bytes, beqGot + 1, got);
+  patchRel8(bytes, bneInner + 1, inner);
+  patchRel8(bytes, bneOuter + 1, outer);
+
+  bytes.push(0x8b); // PHB
+  bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
+  bytes.push(0xa2, 0x00, 0x00); // LDX #page
+  bytes.push(0xa0, 0x00, 0x00); // LDY #offset in 32K bank
+
+  const pageLoop = bytes.length;
+  stzAbs(bytes, 0x2142);
+  bytes.push(0x8a, 0x8d, 0x43, 0x21); // TXA STA $2143
+  ldaSta(bytes, 0x01, 0x2141);
+  bytes.push(0xe0, 0x00, 0x00); // CPX #0
+  const bneLater = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE laterCmd
+  ldaSta(bytes, 0xcc, 0x2140);
+  emitWait2140(bytes, 0xcc);
+  const braAfter = bytes.length;
+  bytes.push(0x80, 0x00); // BRA afterCmd
+  const laterCmd = bytes.length;
+  ldaSta(bytes, 0x01, 0x2140);
+  emitWait2140(bytes, 0x01);
+  const afterCmd = bytes.length;
+  patchRel8(bytes, bneLater + 1, laterCmd);
+  patchRel8(bytes, braAfter + 1, afterCmd);
+
+  const byteLoop = bytes.length;
+  bytes.push(
+    0xb9, 0x00, 0x80, // LDA $8000,Y
+    0x8d, 0x41, 0x21, // STA $2141
+    0x98,             // TYA (index = Y low)
+    0x8d, 0x40, 0x21, // STA $2140
+    0xcd, 0x40, 0x21, // CMP $2140
+    0xd0, 0xfb,
+    0xc8,             // INY
+    0x98,             // TYA
+  );
+  const bneByte = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE byteLoop until Y low wraps
+  patchRel8(bytes, bneByte + 1, byteLoop);
+
+  bytes.push(0xe8); // INX
+  bytes.push(0xe0, 0x80, 0x00); // CPX #$80
+  const bneNoSw = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE noSwitch
+  bytes.push(0xa0, 0x00, 0x00); // LDY #0
+  bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
+  const noSwitch = bytes.length;
+  patchRel8(bytes, bneNoSw + 1, noSwitch);
+  bytes.push(0xe0, 0x00, 0x01); // CPX #$100
+  const bnePage = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE pageLoop
+  patchRel8(bytes, bnePage + 1, pageLoop);
+
   ldaSta(bytes, spcPc, 0x2142);
   ldaSta(bytes, spcPc >> 8, 0x2143);
   stzAbs(bytes, 0x2141);
-  ldaSta(bytes, 0x01, 0x2140); // last index $FF + 2
-  bytes.push(
-    0xad, 0x40, 0x21,
-    0xc9, 0x01,
-    0xd0, 0xf9,
-  );
+  ldaSta(bytes, 0x01, 0x2140);
+  emitWait2140(bytes, 0x01);
+  bytes.push(0xab); // PLB
+
+  const skip = bytes.length;
+  patchRel16(bytes, brlSkip + 1, skip);
   bytes.push(0xe2, 0x10); // SEP #$10
 }
 
@@ -286,8 +337,6 @@ function emitCpuMmio(bytes: number[], state: RhState1, stubBank: number): void {
     0xe2, 0x10,             // SEP #$10
   );
   ldaSta(bytes, state.dma?.hdma_channels ?? 0, 0x420c);
-  ldaSta(bytes, inidispByte(state.ppu), 0x2100);
-  ldaSta(bytes, nmiTimenByte(state.internal), 0x4200);
 }
 
 /**
@@ -387,6 +436,10 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
   if (cpu.e) {
     bytes.push(0x38, 0xfb); // SEC XCE
   }
+  // Enable NMI only after CPU regs are live so the first vblank hits the
+  // game handler, not the stub. IPL must have finished ($4200 still 0).
+  ldaSta(bytes, inidispByte(state.ppu), 0x2100);
+  ldaSta(bytes, nmiTimenByte(state.internal), 0x4200);
   bytes.push(0x5c, u8(pc16), u8(pc16 >> 8), pb); // JML pc
   return Uint8Array.from(bytes);
 }

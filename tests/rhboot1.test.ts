@@ -164,6 +164,10 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.ok(jml >= 0, 'JML $95FEEC');
   assert.ok(staDisp < staNmi, 'INIDISP before $4200');
   assert.ok(staNmi < jml, '$4200 before JML');
+  const plp = findSeq(stub, [0x48, 0x28]);
+  assert.ok(plp >= 0 && plp < staNmi, 'PLP before enabling NMI');
+  assert.ok(findSeq(stub, [0xe0, 0x80, 0x00]) >= 0, 'IPL splits ARAM at 32KiB');
+  assert.equal(findSeq(stub, [0xc0, 0x00, 0x80]), -1, 'must not stream 32KiB as one IPL block');
   const vscroll = findSeq(stub, [0xa9, 0xc0, 0x8d, 0x0e, 0x21, 0xa9, 0x00, 0x8d, 0x0e, 0x21]);
   assert.ok(vscroll >= 0, 'BG1 vscroll $00C0 write-twice to $210E');
   const spcJump = findSeq(stub, [0xa9, 0xb0, 0x8d, 0x42, 0x21, 0xa9, 0x11, 0x8d, 0x43, 0x21]);
