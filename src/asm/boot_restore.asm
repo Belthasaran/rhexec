@@ -23,8 +23,7 @@
         sta     $2100
         lda     #$00
         sta     $4200
-        ; DMA WRAM, VRAM, CGRAM, OAM
-        ; IPL-upload ARAM as two 32KiB blocks (not a new command per 256-byte page);
-; APUIO/PPU/CPU MMIO are STA/LDA long ($00:xxxx) because DBR is the payload bank.
+        ; DMA WRAM, VRAM, CGRAM, OAM. SPC IPL is skipped (handshake hangs).
+; APUIO/PPU/CPU MMIO are STA/LDA long ($00:xxxx) because DBR may not be 0.
 ; poke PPU (scrolls write-twice), $4300–$437F
 ; restore A,X,Y,DB,P then INIDISP + $4200 and jml !PC

@@ -22,3 +22,28 @@ export function mesenLooksPresent(): boolean {
   if (p === 'Mesen' || p === 'Mesen-S') return false;
   return existsSync(p);
 }
+
+/** SIGTERM then SIGKILL so Avalonia cannot keep `npm test` alive. */
+export function stopMesen(child: ChildProcess, waitMs = 500): Promise<void> {
+  return new Promise((resolve) => {
+    if (child.exitCode != null) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      try { child.stdout?.destroy(); } catch { /* ignore */ }
+      try { child.stderr?.destroy(); } catch { /* ignore */ }
+      try { child.unref(); } catch { /* ignore */ }
+      resolve();
+    };
+    const t = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* ignore */ }
+      done();
+    }, waitMs);
+    child.once('exit', () => {
+      clearTimeout(t);
+      done();
+    });
+    try { child.kill('SIGTERM'); } catch { /* ignore */ }
+  });
+}

@@ -355,7 +355,6 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
   const vram = getSectionDecoded(state, 'vram');
   const cgram = getSectionDecoded(state, 'cgram');
   const oam = getSectionDecoded(state, 'oam');
-  const aram = getSectionDecoded(state, 'spc_aram');
 
   const bytes: number[] = [
     0x78,             // SEI
@@ -407,10 +406,9 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
     });
   }
 
-  if (aram && aram.length > 0) {
-    const spc = state.spc;
-    emitSpcIplUpload(bytes, (bank + WRAM_BANKS + VRAM_BANKS) & 0xff, (spc?.pc ?? 0) & 0xffff);
-  }
+  // IPL byte-wait deadlocks (APU never echoes) and never reaches $4200, so
+  // $7E0010 stays 0. ARAM is still embedded for a later handshake; the APU
+  // stays in IPL. NMI must be enabled for Technique A to leave the wait loop.
 
   emitPpuPokes(bytes, state);
   emitCpuMmio(bytes, state, stubBank);
@@ -430,7 +428,7 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
     bytes.push(0x38, 0xfb); // SEC XCE
   }
   // Enable NMI only after CPU regs are live so the first vblank hits the
-  // game handler, not the stub. IPL must have finished ($4200 still 0).
+  // game handler, not the stub.
   ldaSta(bytes, inidispByte(state.ppu), 0x2100);
   ldaSta(bytes, nmiTimenByte(state.internal), 0x4200);
   bytes.push(0x5c, u8(pc16), u8(pc16 >> 8), pb); // JML pc

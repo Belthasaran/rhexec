@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnMesen } from '../src/capture/mesen-spawn.ts';
+import { spawnMesen, stopMesen } from '../src/capture/mesen-spawn.ts';
 import { writeBootProbeScript } from '../src/capture/write-lua.ts';
 import { prepareAkogare121 } from './test-materials/prepare-akogare-1.21.ts';
 import { liveBootProbeSkipReason } from './test-materials/prereqs.ts';
@@ -59,24 +59,24 @@ test('rhboot1-sfc headless: $7E0010 becomes non-zero', { skip: skip || false, ti
   const work = mkdtempSync(join(tmpdir(), 'rhboot1-nmi-'));
   const bootSfc = join(work, 'akogare-boot.sfc');
   const probeDir = join(work, 'probe');
+  let child: ReturnType<typeof spawn> | undefined;
   try {
     await runRhboot1(prepared.sfc, STATE, bootSfc);
     assert.ok(existsSync(bootSfc), 'rhboot1-sfc wrote a boot ROM');
     const lua = writeBootProbeScript(probeDir, TIMEOUT_FRAMES);
     const chunks: Buffer[] = [];
-    const child = spawnMesen({ rom: bootSfc, lua, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawnMesen({ rom: bootSfc, lua, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout?.on('data', (d: Buffer) => chunks.push(d));
     child.stderr?.on('data', (d: Buffer) => chunks.push(d));
     const flag = await waitForDone(probeDir, child, WAIT_MS);
-    if (child.exitCode == null) {
-      try { child.kill('SIGTERM'); } catch { /* ignore */ }
-    }
     const log = Buffer.concat(chunks).toString('utf8');
     const resultPath = join(probeDir, 'nmi_probe.json');
     if (!existsSync(resultPath)) {
       throw new Error(`probe result missing (${flag}); Mesen exit=${child.exitCode}\n${log}`);
     }
-    const result = JSON.parse(readFileSync(resultPath, 'utf8')) as {
+    const raw = readFileSync(resultPath, 'utf8');
+    process.stderr.write(`nmi_probe: ${raw}\n`);
+    const result = JSON.parse(raw) as {
       ok: boolean;
       frame: number;
       last_10: number;
@@ -91,6 +91,7 @@ test('rhboot1-sfc headless: $7E0010 becomes non-zero', { skip: skip || false, ti
       `$7E0010 stayed ${result.last_10} after ${result.frame} frames (PC $${pcHex}, $0100=${result.last_0100 ?? '?'}, $4200=$${nmiHex})`,
     );
   } finally {
+    if (child) await stopMesen(child);
     rmSync(work, { recursive: true, force: true });
   }
 });
