@@ -1,15 +1,20 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process';
 import { existsSync } from 'node:fs';
 
 export function resolveMesenPath(): string {
   return process.env.MESEN_PATH || 'Mesen';
 }
 
-export function spawnMesen(opts: { rom: string; lua: string; extraArgs?: string[] }): ChildProcess {
+export function spawnMesen(opts: {
+  rom: string;
+  lua: string;
+  extraArgs?: string[];
+  stdio?: StdioOptions;
+}): ChildProcess {
   const bin = resolveMesenPath();
   const extra = opts.extraArgs ?? (process.env.MESEN_ARGS ? process.env.MESEN_ARGS.split(/\s+/).filter(Boolean) : []);
   const args = [...extra, opts.rom, '--lua', opts.lua];
-  return spawn(bin, args, { stdio: 'inherit' });
+  return spawn(bin, args, { stdio: opts.stdio ?? 'inherit' });
 }
 
 export function mesenLooksPresent(): boolean {

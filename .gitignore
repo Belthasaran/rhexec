@@ -1,9 +1,11 @@
 node_modules/
 *.rhstate1
+!tests/test-materials/akogare/
+!tests/test-materials/akogare/akogare.rhstate1
 *.yml
+*.bps
 *-boot.sfc
 dump-*/
 tmp/
 .DS_Store
 *.sfc
-*.rhstate1
