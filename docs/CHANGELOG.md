@@ -1,5 +1,6 @@
 # Changelog
 
+- **0.2.11:** Boot stub `PLB`'d to the ARAM payload bank then `STA $2140`, which is DBR-relative — APUIO never saw the IPL handshake, so `$4200` was never written. MMIO now uses long `$00:xxxx`. Rebuild the SFC.
 - **0.2.10:** Boot stub never reached `$4200`: SPC IPL cannot stream 64KiB in one transfer (it stops at 32KiB / 256-byte pages), so the upload loop spun forever and `$10` stayed 0. ARAM is now sent as 256-byte IPL pages with an `$AA` timeout; INIDISP/NMITIMEN are written after `PLP`, immediately before `JML`. Rebuild the SFC.
 - **0.2.9:** `rhboot1-sfc` jumped to the captured NMI-wait (`LDA $10 / BEQ`) with `$4200` left at 0 and no VRAM, so the picture stayed force-blank. The stub now DMA's VRAM/CGRAM/OAM, IPL-uploads ARAM, then restores INIDISP and NMITIMEN before `JML`. Same `.rhstate1`.
 - **0.2.8:** Launch forced `opStep=0` at the captured SPC PC. Mesen's PC is often already past the opcode (`F4 81` with PC at `$11B1`), so the APU executed sample RAM as code (`$BBBC`). Resume now snaps PC back to the opcode when decoder state is missing. Same `.rhstate1`.

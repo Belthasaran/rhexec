@@ -70,11 +70,12 @@ export function inidispByte(ppu?: PpuState | null): number {
 }
 
 function ldaSta(bytes: number[], value: number, addr: number): void {
-  bytes.push(0xa9, u8(value), 0x8d, u8(addr), u8(addr >> 8));
+  // Long addressing: abs STA is DBR-relative; IPL sets DBR to a payload bank.
+  bytes.push(0xa9, u8(value), 0x8f, u8(addr), u8(addr >> 8), 0x00);
 }
 
 function stzAbs(bytes: number[], addr: number): void {
-  bytes.push(0x9c, u8(addr), u8(addr >> 8));
+  bytes.push(0xa9, 0x00, 0x8f, u8(addr), u8(addr >> 8), 0x00);
 }
 
 function writeTwice(bytes: number[], addr: number, word: number): void {
@@ -129,7 +130,7 @@ function packDmaRegs(state: RhState1): Uint8Array {
 }
 
 function emitWait2140(bytes: number[], value: number): void {
-  bytes.push(0xad, 0x40, 0x21, 0xc9, u8(value), 0xd0, 0xf9);
+  bytes.push(0xaf, 0x40, 0x21, 0x00, 0xc9, u8(value), 0xd0, 0xf8);
 }
 
 function patchRel8(bytes: number[], offsetByte: number, target: number): void {
@@ -153,7 +154,7 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number): voi
   const outer = bytes.length;
   bytes.push(0xa2, 0x00, 0x00); // LDX #0
   const inner = bytes.length;
-  bytes.push(0xad, 0x40, 0x21, 0xc9, 0xaa);
+  bytes.push(0xaf, 0x40, 0x21, 0x00, 0xc9, 0xaa);
   const beqGot = bytes.length;
   bytes.push(0xf0, 0x00); // BEQ got
   bytes.push(0xca); // DEX
@@ -176,7 +177,7 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number): voi
 
   const pageLoop = bytes.length;
   stzAbs(bytes, 0x2142);
-  bytes.push(0x8a, 0x8d, 0x43, 0x21); // TXA STA $2143
+  bytes.push(0x8a, 0x8f, 0x43, 0x21, 0x00); // TXA STA $002143
   ldaSta(bytes, 0x01, 0x2141);
   bytes.push(0xe0, 0x00, 0x00); // CPX #0
   const bneLater = bytes.length;
@@ -194,14 +195,14 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number): voi
 
   const byteLoop = bytes.length;
   bytes.push(
-    0xb9, 0x00, 0x80, // LDA $8000,Y
-    0x8d, 0x41, 0x21, // STA $2141
-    0x98,             // TYA (index = Y low)
-    0x8d, 0x40, 0x21, // STA $2140
-    0xcd, 0x40, 0x21, // CMP $2140
-    0xd0, 0xfb,
-    0xc8,             // INY
-    0x98,             // TYA
+    0xb9, 0x00, 0x80,       // LDA $8000,Y (DBR = payload bank)
+    0x8f, 0x41, 0x21, 0x00, // STA $002141
+    0x98,                   // TYA (index = Y low)
+    0x8f, 0x40, 0x21, 0x00, // STA $002140
+    0xcf, 0x40, 0x21, 0x00, // CMP $002140
+    0xd0, 0xfa,
+    0xc8,                   // INY
+    0x98,                   // TYA
   );
   const bneByte = bytes.length;
   bytes.push(0xd0, 0x00); // BNE byteLoop until Y low wraps
@@ -330,10 +331,10 @@ function emitCpuMmio(bytes: number[], state: RhState1, stubBank: number): void {
     0xc2, 0x10,             // REP #$10
     0xa2, 0x00, 0x00,       // LDX #0
     0xbf, u8(STUB_DMA_ADDR), u8(STUB_DMA_ADDR >> 8), u8(stubBank), // LDA abs,x long
-    0x9d, 0x00, 0x43,       // STA $4300,x
+    0x9f, 0x00, 0x43, 0x00, // STA $004300,x
     0xe8,                   // INX
     0xe0, 0x80, 0x00,       // CPX #$80
-    0xd0, 0xf3,             // BNE back to LDA long
+    0xd0, 0xf2,             // BNE back to LDA long
     0xe2, 0x10,             // SEP #$10
   );
   ldaSta(bytes, state.dma?.hdma_channels ?? 0, 0x420c);
@@ -373,9 +374,9 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
     0xa2, u8(sp), u8(sp >> 8),
     0x9a,             // TXS
     0xe2, 0x20,       // SEP #$20
-    0xa9, 0x80, 0x8d, 0x00, 0x21, // INIDISP = $80
-    0xa9, 0x00, 0x8d, 0x00, 0x42, // NMITIMEN = 0
   ];
+  ldaSta(bytes, 0x80, 0x2100);
+  ldaSta(bytes, 0x00, 0x4200);
 
   const wramDest = [0x00000, 0x08000, 0x10000, 0x18000];
   for (let i = 0; i < WRAM_BANKS; i += 1) {

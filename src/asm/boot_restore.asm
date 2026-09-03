@@ -24,6 +24,7 @@
         lda     #$00
         sta     $4200
         ; DMA WRAM, VRAM, CGRAM, OAM
-        ; IPL-upload ARAM in 256-byte pages (IPL cannot stream 64KiB).
+        ; IPL-upload ARAM in 256-byte pages; APUIO/PPU/CPU MMIO are STA/LDA long ($00:xxxx)
+; because DBR is the payload bank during the upload.
 ; poke PPU (scrolls write-twice), $4300–$437F
 ; restore A,X,Y,DB,P then INIDISP + $4200 and jml !PC

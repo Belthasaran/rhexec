@@ -156,8 +156,8 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   const disp = inidispByte(st.ppu);
   assert.equal(nmi, 0xa1);
   assert.equal(disp, 0x0e);
-  const staNmi = findSeq(stub, [0xa9, nmi, 0x8d, 0x00, 0x42]);
-  const staDisp = findSeq(stub, [0xa9, disp, 0x8d, 0x00, 0x21]);
+  const staNmi = findSeq(stub, [0xa9, nmi, 0x8f, 0x00, 0x42, 0x00]);
+  const staDisp = findSeq(stub, [0xa9, disp, 0x8f, 0x00, 0x21, 0x00]);
   const jml = findSeq(stub, [0x5c, 0xec, 0xfe, 0x95]);
   assert.ok(staNmi >= 0, 'STA $4200 with captured NMITIMEN');
   assert.ok(staDisp >= 0, 'STA $2100 with captured INIDISP');
@@ -168,10 +168,11 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.ok(plp >= 0 && plp < staNmi, 'PLP before enabling NMI');
   assert.ok(findSeq(stub, [0xe0, 0x80, 0x00]) >= 0, 'IPL splits ARAM at 32KiB');
   assert.equal(findSeq(stub, [0xc0, 0x00, 0x80]), -1, 'must not stream 32KiB as one IPL block');
-  const vscroll = findSeq(stub, [0xa9, 0xc0, 0x8d, 0x0e, 0x21, 0xa9, 0x00, 0x8d, 0x0e, 0x21]);
+  const vscroll = findSeq(stub, [0xa9, 0xc0, 0x8f, 0x0e, 0x21, 0x00, 0xa9, 0x00, 0x8f, 0x0e, 0x21, 0x00]);
   assert.ok(vscroll >= 0, 'BG1 vscroll $00C0 write-twice to $210E');
-  const spcJump = findSeq(stub, [0xa9, 0xb0, 0x8d, 0x42, 0x21, 0xa9, 0x11, 0x8d, 0x43, 0x21]);
+  const spcJump = findSeq(stub, [0xa9, 0xb0, 0x8f, 0x42, 0x21, 0x00, 0xa9, 0x11, 0x8f, 0x43, 0x21, 0x00]);
   assert.ok(spcJump >= 0, 'IPL jump to aligned SPC PC $11B0');
+  assert.ok(findSeq(stub, [0x8f, 0x40, 0x21, 0x00]) >= 0, 'APUIO uses long $00:2140');
 });
 
 test('nmiTimen / inidisp helpers match the akogare capture bits', () => {
