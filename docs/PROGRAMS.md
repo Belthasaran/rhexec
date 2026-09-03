@@ -26,7 +26,7 @@ npm run rhcap1-mesen -- --rom <file.sfc|file.smc> --mode auto|manual [--out path
 
 ### rhboot1-sfc
 
-Technique A: new SFC with reset trampoline plus WRAM/VRAM/CGRAM/OAM/ARAM payload. Re-enables NMI (`$4200`) and unblanks INIDISP. Timed SPC IPL uploads ARAM (two 32KiB blocks) then jumps to the captured SPC PC. Does not patch `$05D89B`/`$05DCDD`. SA-1 and DSP envelopes are not restored.
+Technique A: new SFC with reset trampoline plus WRAM/VRAM/CGRAM/OAM/ARAM payload. Re-enables NMI (`$4200`) and unblanks INIDISP. Timed SPC IPL uploads ARAM (two 32KiB blocks), then an echo-RAM trampoline restores SPC GPRs/`$F1`/`$00/$01` and jumps to the aligned captured PC. Does not patch `$05D89B`/`$05DCDD`. SA-1 and DSP envelopes are not restored.
 
 ```bash
 npm run rhboot1-sfc -- --rom <sfc> --state <rhstate1> [--out file-boot.sfc] [--level HEX] [--ow-submap N --ow-x N --ow-y N]

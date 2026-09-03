@@ -2,7 +2,7 @@ import { getSectionDecoded } from '../rhstate1/codec.ts';
 import { obselByte } from '../rhstate1/obsel.ts';
 import { splitRomHeader } from '../rhstate1/rom-info.ts';
 import { emptyDmaChannel, type DmaChannel, type InternalRegs, type PpuState, type RhState1 } from '../rhstate1/types.ts';
-import { prepareSpcResume } from '../players/mesen-state-map.ts';
+import { alignSpcFetchPc, prepareSpcResume } from '../players/mesen-state-map.ts';
 
 export { obselByte } from '../rhstate1/obsel.ts';
 
@@ -200,6 +200,50 @@ function patchRel16(bytes: number[], offsetLo: number, target: number): void {
   const rel = (target - (offsetLo + 2)) & 0xffff;
   bytes[offsetLo] = rel & 0xff;
   bytes[offsetLo + 1] = (rel >> 8) & 0xff;
+}
+
+/** Echo start when EDL>0, else just below IPL ROM. */
+export function spcTrampolineAddr(state: RhState1): number {
+  const dsp = getSectionDecoded(state, 'dsp');
+  const edl = dsp && dsp.length > 0x7d ? dsp[0x7d]! & 0x0f : 0;
+  if (edl > 0 && dsp && dsp.length > 0x6d) {
+    return (dsp[0x6d]! << 8) & 0xffff;
+  }
+  return 0xffb0;
+}
+
+/**
+ * SPC bytes IPL jumps to after the 64KiB ARAM copy. Restores PSW/SP/CONTROL/DP/X/Y/A
+ * then JMP to the aligned opcode (IPL is a fresh fetch; ignore op_step).
+ */
+export function spcResumeTrampoline(state: RhState1): { addr: number; bytes: Uint8Array; pc: number } {
+  const aram = getSectionDecoded(state, 'spc_aram');
+  const spc = state.spc;
+  const pc = alignSpcFetchPc(aram, spc?.pc ?? 0);
+  const addr = spcTrampolineAddr(state);
+  const psw = (spc?.psw ?? 0) & 0xff;
+  const sp = (spc?.sp ?? 0xef) & 0xff;
+  const x = (spc?.x ?? 0) & 0xff;
+  const y = (spc?.y ?? 0) & 0xff;
+  const a = (spc?.a ?? 0) & 0xff;
+  const f1 = aram && aram.length > 0xf1 ? aram[0xf1]! : 0;
+  const dp0 = aram && aram.length > 0 ? aram[0]! : 0;
+  const dp1 = aram && aram.length > 1 ? aram[1]! : 0;
+  const bytes = Uint8Array.from([
+    0xe8, psw,             // MOV A,#psw
+    0x2d,                  // PUSH A
+    0x8e,                  // POP PSW
+    0xcd, sp,              // MOV X,#sp
+    0xbd,                  // MOV SP,X
+    0x8f, f1, 0xf1,        // MOV $F1,#f1  (unmap IPL if bit7=0)
+    0x8f, dp0, 0x00,       // MOV $00,#  (undo IPL dest word)
+    0x8f, dp1, 0x01,       // MOV $01,#
+    0xcd, x,               // MOV X,#x
+    0x8d, y,               // MOV Y,#y
+    0xe8, a,               // MOV A,#a
+    0x5f, pc & 0xff, (pc >> 8) & 0xff, // JMP !pc
+  ]);
+  return { addr, bytes, pc };
 }
 
 /**
@@ -438,7 +482,8 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
   }
 
   const aramBank = (bank + WRAM_BANKS + VRAM_BANKS) & 0xff;
-  emitSpcIplUpload(bytes, aramBank, state.spc?.pc ?? 0, state.spc?.cpu_regs);
+  const tramp = spcResumeTrampoline(state);
+  emitSpcIplUpload(bytes, aramBank, tramp.addr, state.spc?.cpu_regs);
 
   emitPpuPokes(bytes, state);
   emitCpuMmio(bytes, state, stubBank);
@@ -501,7 +546,12 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   const payload = new Uint8Array(PAYLOAD_BANKS * LOROM_BANK);
   payload.set(pad(wram, 0x20000), 0);
   payload.set(pad(getSectionDecoded(work, 'vram'), 0x10000), WRAM_BANKS * LOROM_BANK);
-  payload.set(pad(getSectionDecoded(work, 'spc_aram'), 0x10000), (WRAM_BANKS + VRAM_BANKS) * LOROM_BANK);
+  const aramPayload = pad(getSectionDecoded(work, 'spc_aram'), 0x10000);
+  const spcTramp = spcResumeTrampoline(work);
+  if (spcTramp.addr + spcTramp.bytes.length <= aramPayload.length) {
+    aramPayload.set(spcTramp.bytes, spcTramp.addr);
+  }
+  payload.set(aramPayload, (WRAM_BANKS + VRAM_BANKS) * LOROM_BANK);
 
   const minLen = (origBanks + 1 + PAYLOAD_BANKS) * LOROM_BANK;
   let newLen = 0x8000;
@@ -514,13 +564,13 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   expanded.set(payload, payloadOff);
 
   const rst = loromOffset(0, 0xfffc);
-  const tramp = loromOffset(0, 0xff70);
-  if (tramp + 4 <= expanded.length) {
+  const rstTramp = loromOffset(0, 0xff70);
+  if (rstTramp + 4 <= expanded.length) {
     const destBank = origBanks & 0xff;
-    expanded[tramp] = 0x5c;
-    expanded[tramp + 1] = 0x00;
-    expanded[tramp + 2] = 0x80;
-    expanded[tramp + 3] = destBank;
+    expanded[rstTramp] = 0x5c;
+    expanded[rstTramp + 1] = 0x00;
+    expanded[rstTramp + 2] = 0x80;
+    expanded[rstTramp + 3] = destBank;
     expanded[rst] = 0x70;
     expanded[rst + 1] = 0xff;
   }

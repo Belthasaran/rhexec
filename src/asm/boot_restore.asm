@@ -23,7 +23,8 @@
         sta     $2100
         lda     #$00
         sta     $4200
-        ; DMA WRAM, VRAM, CGRAM, OAM. Timed SPC IPL (two 32KiB blocks + jump).
+        ; DMA WRAM, VRAM, CGRAM, OAM. Timed SPC IPL (two 32KiB blocks).
+        ; Jump to echo-RAM trampoline: restore PSW/SP/$F1/$00/$01/X/Y/A, JMP aligned PC.
 ; APUIO/PPU/CPU MMIO are STA/LDA long ($00:xxxx) because DBR may not be 0.
 ; poke PPU (scrolls write-twice), $4300–$437F
 ; restore A,X,Y,DB,P then INIDISP + $4200 and jml !PC

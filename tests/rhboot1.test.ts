@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildBootRestoreRom, inidispByte, loromOffset, nmiTimenByte, obselByte } from '../src/boot/boot-restore.ts';
+import { buildBootRestoreRom, inidispByte, loromOffset, nmiTimenByte, obselByte, spcResumeTrampoline } from '../src/boot/boot-restore.ts';
 import { reconstructFillram } from '../src/players/mesen-state-map.ts';
 import { emptyCpu, makeFixtureRom, makeState } from './helpers.ts';
 import type { InternalRegs, PpuLayer, PpuState } from '../src/rhstate1/types.ts';
@@ -46,6 +46,10 @@ function akogareLikeState() {
   const aram = new Uint8Array(0x10000);
   aram[0x11b0] = 0xf4;
   aram[0x11b1] = 0x81;
+  aram[0xf1] = 0x31;
+  const dsp = new Uint8Array(0x80);
+  dsp[0x6d] = 0x60;
+  dsp[0x7d] = 2;
   const ppu: PpuState = {
     forced_blank: 0,
     brightness: 14,
@@ -109,6 +113,7 @@ function akogareLikeState() {
       { id: 'cgram', bus: 0, encoding: 'raw', data: cgram },
       { id: 'oam', bus: 0, encoding: 'raw', data: oam },
       { id: 'spc_aram', bus: 0, encoding: 'raw', data: aram },
+      { id: 'dsp', bus: 0, encoding: 'raw', data: dsp },
     ],
   });
 }
@@ -180,6 +185,25 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.equal(stub[waitCmp + 6], 0xca, 'DEX after failed echo');
   assert.ok(findSeq(stub, [0xa9, 0x11, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'restore APUIO $2140 from cpu_regs');
   assert.ok(findSeq(stub, [0xa9, 0x22, 0x8f, 0x41, 0x21, 0x00]) >= 0, 'restore APUIO $2141 from cpu_regs');
+  assert.ok(findSeq(stub, [0xa9, 0x00, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'IPL dest low $2142');
+  assert.ok(findSeq(stub, [0xa9, 0x60, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'IPL jump dest high $6000 (echo trampoline)');
+  const tramp = spcResumeTrampoline(st);
+  assert.equal(tramp.addr, 0x6000);
+  assert.equal(tramp.pc, 0x11b0);
+  assert.deepEqual([...body.subarray(aramOffset + 0x6000, aramOffset + 0x6000 + tramp.bytes.length)], [...tramp.bytes]);
+  assert.ok(findSeq(tramp.bytes, [0x5f, 0xb0, 0x11]) >= 0, 'trampoline JMP $11B0');
+});
+
+test('SPC trampoline aligns PC even when op_step is set', () => {
+  const st = akogareLikeState();
+  st.spc = { ...st.spc!, pc: 0x11b1, op_step: 1 };
+  const tramp = spcResumeTrampoline(st);
+  assert.equal(tramp.pc, 0x11b0);
+  const { rom: out, aramOffset, stubOffset } = buildBootRestoreRom(makeFixtureRom(), st);
+  const body = bodyOf(out);
+  assert.ok(findSeq(body.subarray(aramOffset + tramp.addr, aramOffset + tramp.addr + tramp.bytes.length), [0x5f, 0xb0, 0x11]) >= 0);
+  const stub = body.subarray(stubOffset, stubOffset + 0x600);
+  assert.ok(findSeq(stub, [0xa9, 0x60, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'jump dest is trampoline not $11B0');
 });
 
 test('obselByte packs Mesen OamMode/base/offset into $2101', () => {
