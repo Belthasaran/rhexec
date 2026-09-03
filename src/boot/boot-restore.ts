@@ -1,7 +1,10 @@
 import { getSectionDecoded } from '../rhstate1/codec.ts';
+import { obselByte } from '../rhstate1/obsel.ts';
 import { splitRomHeader } from '../rhstate1/rom-info.ts';
 import { emptyDmaChannel, type DmaChannel, type InternalRegs, type PpuState, type RhState1 } from '../rhstate1/types.ts';
 import { prepareSpcResume } from '../players/mesen-state-map.ts';
+
+export { obselByte } from '../rhstate1/obsel.ts';
 
 const LOROM_BANK = 0x8000;
 export const STUB_CGRAM_ADDR = 0x8600;
@@ -129,9 +132,12 @@ function packDmaRegs(state: RhState1): Uint8Array {
   return table;
 }
 
-/** Wait until $00:2140 == value. 16-bit X is a spin limit so a dead APU cannot freeze NMI. */
-function emitWait2140(bytes: number[], value: number): void {
-  bytes.push(0xa2, 0x00, 0x00); // LDX #0
+/** Per-byte / kick echo spin. IPL answers in a handful of SPC cycles. */
+const IPL_WAIT_LIMIT = 0x1000;
+
+/** Wait until $00:2140 == value. Timeout BRL skip so a dead APU cannot freeze NMI. */
+function emitWait2140(bytes: number[], value: number, skipBrls: number[]): void {
+  bytes.push(0xa2, u8(IPL_WAIT_LIMIT), u8(IPL_WAIT_LIMIT >> 8)); // LDX #limit
   const loop = bytes.length;
   bytes.push(0xaf, 0x40, 0x21, 0x00, 0xc9, u8(value));
   const beq = bytes.length;
@@ -139,21 +145,23 @@ function emitWait2140(bytes: number[], value: number): void {
   bytes.push(0xca); // DEX
   const bne = bytes.length;
   bytes.push(0xd0, 0x00); // BNE loop
+  skipBrls.push(bytes.length + 1);
+  bytes.push(0x82, 0x00, 0x00); // BRL skip
   const done = bytes.length;
   patchRel8(bytes, beq + 1, done);
   patchRel8(bytes, bne + 1, loop);
 }
 
-function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean): void {
+function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean, skipBrls: number[]): void {
   ldaSta(bytes, dest, 0x2142);
   ldaSta(bytes, dest >> 8, 0x2143);
   ldaSta(bytes, more ? 0x01 : 0x00, 0x2141);
   ldaSta(bytes, kick, 0x2140);
-  emitWait2140(bytes, kick);
+  emitWait2140(bytes, kick, skipBrls);
 }
 
 /** One IPL block: 32KiB via 8-bit index wrap (IPL increments dest high itself). */
-function emitIpl32k(bytes: number[]): void {
+function emitIpl32k(bytes: number[], skipBrls: number[]): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0
   const byteLoop = bytes.length;
   bytes.push(
@@ -161,8 +169,21 @@ function emitIpl32k(bytes: number[]): void {
     0x8f, 0x41, 0x21, 0x00, // STA $002141
     0x98,                   // TYA
     0x8f, 0x40, 0x21, 0x00, // STA $002140
-    0xcf, 0x40, 0x21, 0x00, // CMP $002140
-    0xd0, 0xfa,             // BNE wait echo
+    0xa2, u8(IPL_WAIT_LIMIT), u8(IPL_WAIT_LIMIT >> 8), // LDX #limit
+  );
+  const wait = bytes.length;
+  bytes.push(0xcf, 0x40, 0x21, 0x00); // CMP $002140
+  const beq = bytes.length;
+  bytes.push(0xf0, 0x00); // BEQ next
+  bytes.push(0xca); // DEX
+  const bneWait = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE wait
+  skipBrls.push(bytes.length + 1);
+  bytes.push(0x82, 0x00, 0x00); // BRL skip
+  const next = bytes.length;
+  patchRel8(bytes, beq + 1, next);
+  patchRel8(bytes, bneWait + 1, wait);
+  bytes.push(
     0xc8,                   // INY
     0xc0, 0x00, 0x80,       // CPY #$8000
   );
@@ -187,9 +208,12 @@ function patchRel16(bytes: number[], offsetLo: number, target: number): void {
  * right split. Do not start a new command every 256 bytes: after Y wraps the
  * IPL increments dest high and expects index 0 of the *same* transfer, so a
  * new $2140 kick deadlocks and $4200 is never written.
+ * Every $2140 wait times out to `skip` so NMI is still enabled if the APU is dead.
  */
-function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number): void {
+function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuRegs?: number[]): void {
+  const skipBrls: number[] = [];
   bytes.push(0xc2, 0x10); // REP #$10
+  bytes.push(0x8b); // PHB — both success and skip PLB
   bytes.push(0xa0, 0x20, 0x00); // LDY #$0020 timeout outer
   const outer = bytes.length;
   bytes.push(0xa2, 0x00, 0x00); // LDX #0
@@ -203,32 +227,39 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number): voi
   bytes.push(0x88); // DEY
   const bneOuter = bytes.length;
   bytes.push(0xd0, 0x00); // BNE outer
-  const brlSkip = bytes.length;
+  skipBrls.push(bytes.length + 1);
   bytes.push(0x82, 0x00, 0x00); // BRL skip
   const got = bytes.length;
   patchRel8(bytes, beqGot + 1, got);
   patchRel8(bytes, bneInner + 1, inner);
   patchRel8(bytes, bneOuter + 1, outer);
 
-  bytes.push(0x8b); // PHB
   bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
-  emitIplKick(bytes, 0x0000, 0xcc, true);
-  emitIpl32k(bytes);
+  emitIplKick(bytes, 0x0000, 0xcc, true, skipBrls);
+  emitIpl32k(bytes, skipBrls);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  emitIplKick(bytes, 0x8000, 0x01, true);
-  emitIpl32k(bytes);
-  emitIplKick(bytes, spcPc & 0xffff, 0x01, false);
-  bytes.push(0xab); // PLB
-
+  emitIplKick(bytes, 0x8000, 0x01, true, skipBrls);
+  emitIpl32k(bytes, skipBrls);
+  emitIplKick(bytes, spcPc & 0xffff, 0x01, false, skipBrls);
+  const regs = cpuRegs ?? [0, 0, 0, 0];
+  for (let i = 0; i < 4; i += 1) {
+    ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);
+  }
+  bytes.push(0xab); // PLB success
+  const braEnd = bytes.length;
+  bytes.push(0x80, 0x00); // BRA end
   const skip = bytes.length;
-  patchRel16(bytes, brlSkip + 1, skip);
+  bytes.push(0xab); // PLB timeout
+  const endIpl = bytes.length;
+  bytes[braEnd + 1] = (endIpl - (braEnd + 2)) & 0xff;
+  for (const off of skipBrls) patchRel16(bytes, off, skip);
   bytes.push(0xe2, 0x10); // SEP #$10
 }
 
 function emitPpuPokes(bytes: number[], state: RhState1): void {
   const ppu = state.ppu;
   if (ppu) {
-    ldaSta(bytes, ppu.oam_mode, 0x2101);
+    ldaSta(bytes, obselByte(ppu), 0x2101);
     let bgmode = ppu.bgmode & 0x07;
     if (ppu.mode1_bg3_priority) bgmode |= 0x08;
     const layers = ppu.layers ?? [];
@@ -406,9 +437,8 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
     });
   }
 
-  // IPL byte-wait deadlocks (APU never echoes) and never reaches $4200, so
-  // $7E0010 stays 0. ARAM is still embedded for a later handshake; the APU
-  // stays in IPL. NMI must be enabled for Technique A to leave the wait loop.
+  const aramBank = (bank + WRAM_BANKS + VRAM_BANKS) & 0xff;
+  emitSpcIplUpload(bytes, aramBank, state.spc?.pc ?? 0, state.spc?.cpu_regs);
 
   emitPpuPokes(bytes, state);
   emitCpuMmio(bytes, state, stubBank);

@@ -20,6 +20,7 @@ import {
   type MssFile,
 } from './mss-format.ts';
 import { getSectionDecoded } from '../rhstate1/codec.ts';
+import { obselByte } from '../rhstate1/obsel.ts';
 import {
   emptyDmaChannel,
   normalizeCpu,
@@ -741,7 +742,7 @@ export function reconstructFillram(state: RhState1): Uint8Array {
   const ppu = state.ppu;
   if (ppu) {
     fil[0x2100] = ((ppu.forced_blank ? 0x80 : 0) | (ppu.brightness & 0x0f)) & 0xff;
-    fil[0x2101] = ppu.oam_mode & 0xff;
+    fil[0x2101] = obselByte(ppu);
     fil[0x2102] = ppu.oam_addr & 0xff;
     fil[0x2103] = ((ppu.oam_addr >> 8) & 0x01) | (ppu.oam_priority ? 0x80 : 0);
     const layers = ppu.layers ?? [];

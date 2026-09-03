@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildBootRestoreRom, inidispByte, loromOffset, nmiTimenByte } from '../src/boot/boot-restore.ts';
+import { buildBootRestoreRom, inidispByte, loromOffset, nmiTimenByte, obselByte } from '../src/boot/boot-restore.ts';
+import { reconstructFillram } from '../src/players/mesen-state-map.ts';
 import { emptyCpu, makeFixtureRom, makeState } from './helpers.ts';
 import type { InternalRegs, PpuLayer, PpuState } from '../src/rhstate1/types.ts';
 
@@ -61,9 +62,10 @@ function akogareLikeState() {
     mosaic_size: 0,
     mosaic_enabled: 0,
     oam_mode: 0,
-    oam_base: 0,
+    oam_base: 24576,
     oam_addr: 0,
-    oam_priority: 0,
+    oam_priority: 1,
+    oam_address_offset: 4096,
     hi_res: 0,
     screen_interlace: 0,
     obj_interlace: 0,
@@ -99,7 +101,7 @@ function akogareLikeState() {
     cpu: { ...emptyCpu(), pc: 0x95feec, e: 0, p: 0x33 },
     ppu,
     internal,
-    spc: { a: 0, x: 2, y: 20, psw: 2, sp: 0xcd, pc: 0x11b1 },
+    spc: { a: 0, x: 2, y: 20, psw: 2, sp: 0xcd, pc: 0x11b1, cpu_regs: [0x11, 0x22, 0x33, 0x44] },
     dma: { hdma_channels: 0, channels: [] },
     sections: [
       { id: 'wram', bus: 0x7e0000, encoding: 'raw', data: wram },
@@ -168,6 +170,28 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.ok(plp >= 0 && plp < staNmi, 'PLP before enabling NMI');
   const vscroll = findSeq(stub, [0xa9, 0xc0, 0x8f, 0x0e, 0x21, 0x00, 0xa9, 0x00, 0x8f, 0x0e, 0x21, 0x00]);
   assert.ok(vscroll >= 0, 'BG1 vscroll $00C0 write-twice to $210E');
+  const obsel = findSeq(stub, [0xa9, 0x03, 0x8f, 0x01, 0x21, 0x00]);
+  assert.ok(obsel >= 0, 'STA $2101 with packed OBSEL $03');
+  assert.ok(findSeq(stub, [0xc9, 0xaa]) >= 0, 'IPL waits for $AA');
+  assert.ok(findSeq(stub, [0x8f, 0x42, 0x21, 0x00]) >= 0, 'IPL writes dest $2142');
+  assert.equal(findSeq(stub, [0xcf, 0x40, 0x21, 0x00, 0xd0, 0xfa]), -1, 'IPL byte wait is timed (not BNE -6)');
+  const waitCmp = findSeq(stub, [0xcf, 0x40, 0x21, 0x00, 0xf0]);
+  assert.ok(waitCmp >= 0, 'IPL byte wait CMP then BEQ');
+  assert.equal(stub[waitCmp + 6], 0xca, 'DEX after failed echo');
+  assert.ok(findSeq(stub, [0xa9, 0x11, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'restore APUIO $2140 from cpu_regs');
+  assert.ok(findSeq(stub, [0xa9, 0x22, 0x8f, 0x41, 0x21, 0x00]) >= 0, 'restore APUIO $2141 from cpu_regs');
+});
+
+test('obselByte packs Mesen OamMode/base/offset into $2101', () => {
+  assert.equal(obselByte({ oam_mode: 0, oam_base: 24576, oam_address_offset: 4096 }), 0x03);
+  assert.equal(obselByte({ oam_mode: 3, oam_base: 0x4000, oam_address_offset: 0x3000 }), 0x72);
+  assert.equal(obselByte({ oam_mode: 0, oam_base: 0 }), 0x00);
+});
+
+test('reconstructFillram writes packed OBSEL to $2101', () => {
+  const st = akogareLikeState();
+  const fil = reconstructFillram(st);
+  assert.equal(fil[0x2101], 0x03);
 });
 
 test('nmiTimen / inidisp helpers match the akogare capture bits', () => {

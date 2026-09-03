@@ -1,5 +1,6 @@
 # Changelog
 
+- **0.2.15:** Boot stub packs `$2101` from Mesen `oam_mode`/`oam_base`/`oam_address_offset` (Akogare `$03`, name base `$6000`) so sprites no longer fetch BG CHR. SPC IPL is on again: two 32KiB transfers with timed `$2140` waits that skip to `$4200` if the APU is dead, then jump to the captured SPC PC and restore `cpu_regs`. Rebuild the SFC.
 - **0.2.14:** Boot stub skipped SPC IPL: the per-byte `$2140` wait never times out, so `$4200` was never written and `$7E0010` stayed 0. Headless probe now SIGKILLs Mesen so `npm test` cannot hang after `✖`.
 - **0.2.13:** Boot stub IPL started a new `$2140` command after every 256-byte page. After Y wraps the IPL keeps the same transfer, so that kick deadlocks and `$4200` is never written (`$7E0010` stays 0). ARAM is two 32KiB IPL blocks. Rebuild the SFC.
 - **0.2.12:** Headless Mesen test builds a Technique A boot SFC and fails if `$7E0010` stays 0. Akogare 1.21 source ROM is prepared via `fetchpatches` (same as `get_hack.sh`), never Kaizoff/Speedrun.com; Kaizoff zip download is separate infra for other hacks. Live test skips without `MESEN_PATH` / `SMW_SFC_PATH` / `flips`.
