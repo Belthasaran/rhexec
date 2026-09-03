@@ -2,7 +2,9 @@
 
 All commands from `rhexec/` after `npm install`. Node 20+. `--help` on every CLI.
 
-Environment: `MESEN_PATH` (Mesen 2 binary, default `Mesen`), `MESEN_ARGS` (extra spawn args).
+Environment: `MESEN_PATH` (Mesen 2 binary, default `Mesen`), `MESEN_ARGS` (extra spawn args; put the headless flag here for the NMI probe), `SMW_SFC_PATH` (unheadered SMW for flips), `FLIPS_PATH` (optional; otherwise `flips` on PATH), `RHPLAY_ROOT` (optional neighbor tree for `fetchpatches.js`).
+
+`npm test` includes a live headless probe that builds `rhboot1-sfc` for Akogare 1.21 and fails if `$7E0010` stays 0. Skipped when Mesen, `SMW_SFC_PATH`, or `flips` is missing. Source SFC is fetched like `lmlevelinfo/test/get_hack.sh` (not Kaizoff; that catalog BPS is older than 1.21).
 
 ---
 

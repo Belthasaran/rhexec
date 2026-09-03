@@ -129,8 +129,46 @@ function packDmaRegs(state: RhState1): Uint8Array {
   return table;
 }
 
+/** Wait until $00:2140 == value. 16-bit X is a spin limit so a dead APU cannot freeze NMI. */
 function emitWait2140(bytes: number[], value: number): void {
-  bytes.push(0xaf, 0x40, 0x21, 0x00, 0xc9, u8(value), 0xd0, 0xf8);
+  bytes.push(0xa2, 0x00, 0x00); // LDX #0
+  const loop = bytes.length;
+  bytes.push(0xaf, 0x40, 0x21, 0x00, 0xc9, u8(value));
+  const beq = bytes.length;
+  bytes.push(0xf0, 0x00); // BEQ done
+  bytes.push(0xca); // DEX
+  const bne = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE loop
+  const done = bytes.length;
+  patchRel8(bytes, beq + 1, done);
+  patchRel8(bytes, bne + 1, loop);
+}
+
+function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean): void {
+  ldaSta(bytes, dest, 0x2142);
+  ldaSta(bytes, dest >> 8, 0x2143);
+  ldaSta(bytes, more ? 0x01 : 0x00, 0x2141);
+  ldaSta(bytes, kick, 0x2140);
+  emitWait2140(bytes, kick);
+}
+
+/** One IPL block: 32KiB via 8-bit index wrap (IPL increments dest high itself). */
+function emitIpl32k(bytes: number[]): void {
+  bytes.push(0xa0, 0x00, 0x00); // LDY #0
+  const byteLoop = bytes.length;
+  bytes.push(
+    0xb9, 0x00, 0x80,       // LDA $8000,Y
+    0x8f, 0x41, 0x21, 0x00, // STA $002141
+    0x98,                   // TYA
+    0x8f, 0x40, 0x21, 0x00, // STA $002140
+    0xcf, 0x40, 0x21, 0x00, // CMP $002140
+    0xd0, 0xfa,             // BNE wait echo
+    0xc8,                   // INY
+    0xc0, 0x00, 0x80,       // CPY #$8000
+  );
+  const bneByte = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bneByte + 1, byteLoop);
 }
 
 function patchRel8(bytes: number[], offsetByte: number, target: number): void {
@@ -144,9 +182,11 @@ function patchRel16(bytes: number[], offsetLo: number, target: number): void {
 }
 
 /**
- * SPC IPL only streams until dest bit7 is set (32KiB from $0000, or 256
- * bytes from $8000+). A single 64KiB transfer never finishes. Upload 256-byte
- * pages; skip the APU entirely if $2140 never becomes $AA.
+ * SPC IPL: one transfer can stream until dest high bit7 is set (~32KiB).
+ * A 64KiB transfer wraps dest and never finishes. Two 32KiB blocks is the
+ * right split. Do not start a new command every 256 bytes: after Y wraps the
+ * IPL increments dest high and expects index 0 of the *same* transfer, so a
+ * new $2140 kick deadlocks and $4200 is never written.
  */
 function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number): void {
   bytes.push(0xc2, 0x10); // REP #$10
@@ -172,60 +212,12 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number): voi
 
   bytes.push(0x8b); // PHB
   bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
-  bytes.push(0xa2, 0x00, 0x00); // LDX #page
-  bytes.push(0xa0, 0x00, 0x00); // LDY #offset in 32K bank
-
-  const pageLoop = bytes.length;
-  stzAbs(bytes, 0x2142);
-  bytes.push(0x8a, 0x8f, 0x43, 0x21, 0x00); // TXA STA $002143
-  ldaSta(bytes, 0x01, 0x2141);
-  bytes.push(0xe0, 0x00, 0x00); // CPX #0
-  const bneLater = bytes.length;
-  bytes.push(0xd0, 0x00); // BNE laterCmd
-  ldaSta(bytes, 0xcc, 0x2140);
-  emitWait2140(bytes, 0xcc);
-  const braAfter = bytes.length;
-  bytes.push(0x80, 0x00); // BRA afterCmd
-  const laterCmd = bytes.length;
-  ldaSta(bytes, 0x01, 0x2140);
-  emitWait2140(bytes, 0x01);
-  const afterCmd = bytes.length;
-  patchRel8(bytes, bneLater + 1, laterCmd);
-  patchRel8(bytes, braAfter + 1, afterCmd);
-
-  const byteLoop = bytes.length;
-  bytes.push(
-    0xb9, 0x00, 0x80,       // LDA $8000,Y (DBR = payload bank)
-    0x8f, 0x41, 0x21, 0x00, // STA $002141
-    0x98,                   // TYA (index = Y low)
-    0x8f, 0x40, 0x21, 0x00, // STA $002140
-    0xcf, 0x40, 0x21, 0x00, // CMP $002140
-    0xd0, 0xfa,
-    0xc8,                   // INY
-    0x98,                   // TYA
-  );
-  const bneByte = bytes.length;
-  bytes.push(0xd0, 0x00); // BNE byteLoop until Y low wraps
-  patchRel8(bytes, bneByte + 1, byteLoop);
-
-  bytes.push(0xe8); // INX
-  bytes.push(0xe0, 0x80, 0x00); // CPX #$80
-  const bneNoSw = bytes.length;
-  bytes.push(0xd0, 0x00); // BNE noSwitch
-  bytes.push(0xa0, 0x00, 0x00); // LDY #0
+  emitIplKick(bytes, 0x0000, 0xcc, true);
+  emitIpl32k(bytes);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  const noSwitch = bytes.length;
-  patchRel8(bytes, bneNoSw + 1, noSwitch);
-  bytes.push(0xe0, 0x00, 0x01); // CPX #$100
-  const bnePage = bytes.length;
-  bytes.push(0xd0, 0x00); // BNE pageLoop
-  patchRel8(bytes, bnePage + 1, pageLoop);
-
-  ldaSta(bytes, spcPc, 0x2142);
-  ldaSta(bytes, spcPc >> 8, 0x2143);
-  stzAbs(bytes, 0x2141);
-  ldaSta(bytes, 0x01, 0x2140);
-  emitWait2140(bytes, 0x01);
+  emitIplKick(bytes, 0x8000, 0x01, true);
+  emitIpl32k(bytes);
+  emitIplKick(bytes, spcPc & 0xffff, 0x01, false);
   bytes.push(0xab); // PLB
 
   const skip = bytes.length;

@@ -31,6 +31,8 @@ npm test
 
 Live Mesen capture is skipped unless `MESEN_PATH` points at a real binary.
 
+The boot-restore NMI probe (`tests/rhboot1_headless_nmi_probe.test.ts`) also needs `SMW_SFC_PATH`, `flips` (`FLIPS_PATH` or PATH), and `MESEN_ARGS` for Mesen's headless flag. Akogare 1.21 SFC is prepared at runtime via neighboring RHPlay `fetchpatches.js` (gameid 18612); BPS/SFC sha256 pins must match v1.21. Kaizoff is not used for 18612.
+
 ## Why this exists
 
 `4lvno` hijacks SMW’s level loader. Some hacks have customized load procs and crash. These tools record state after a **normal** in-level entry and play it back without patching `$05D89B` / `$05DCDD`.

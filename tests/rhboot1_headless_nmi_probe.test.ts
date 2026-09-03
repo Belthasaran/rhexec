@@ -80,12 +80,15 @@ test('rhboot1-sfc headless: $7E0010 becomes non-zero', { skip: skip || false, ti
       ok: boolean;
       frame: number;
       last_10: number;
+      last_0100?: number;
+      last_4200?: number;
       pc: number;
     };
     const pcHex = result.pc.toString(16).toUpperCase().padStart(6, '0');
+    const nmiHex = (result.last_4200 ?? 0).toString(16).toUpperCase().padStart(2, '0');
     assert.ok(
       result.ok && result.last_10 !== 0,
-      `$7E0010 stayed ${result.last_10} after ${result.frame} frames (PC $${pcHex})`,
+      `$7E0010 stayed ${result.last_10} after ${result.frame} frames (PC $${pcHex}, $0100=${result.last_0100 ?? '?'}, $4200=$${nmiHex})`,
     );
   } finally {
     rmSync(work, { recursive: true, force: true });

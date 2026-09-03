@@ -1,5 +1,7 @@
 # Changelog
 
+- **0.2.13:** Boot stub IPL started a new `$2140` command after every 256-byte page. After Y wraps the IPL keeps the same transfer, so that kick deadlocks and `$4200` is never written (`$7E0010` stays 0). ARAM is two 32KiB IPL blocks. Rebuild the SFC.
+- **0.2.12:** Headless Mesen test builds a Technique A boot SFC and fails if `$7E0010` stays 0. Akogare 1.21 source ROM is prepared via `fetchpatches` (same as `get_hack.sh`), never Kaizoff/Speedrun.com; Kaizoff zip download is separate infra for other hacks. Live test skips without `MESEN_PATH` / `SMW_SFC_PATH` / `flips`.
 - **0.2.11:** Boot stub `PLB`'d to the ARAM payload bank then `STA $2140`, which is DBR-relative — APUIO never saw the IPL handshake, so `$4200` was never written. MMIO now uses long `$00:xxxx`. Rebuild the SFC.
 - **0.2.10:** Boot stub never reached `$4200`: SPC IPL cannot stream 64KiB in one transfer (it stops at 32KiB / 256-byte pages), so the upload loop spun forever and `$10` stayed 0. ARAM is now sent as 256-byte IPL pages with an `$AA` timeout; INIDISP/NMITIMEN are written after `PLP`, immediately before `JML`. Rebuild the SFC.
 - **0.2.9:** `rhboot1-sfc` jumped to the captured NMI-wait (`LDA $10 / BEQ`) with `$4200` left at 0 and no VRAM, so the picture stayed force-blank. The stub now DMA's VRAM/CGRAM/OAM, IPL-uploads ARAM, then restores INIDISP and NMITIMEN before `JML`. Same `.rhstate1`.

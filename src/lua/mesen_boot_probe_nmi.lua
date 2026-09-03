@@ -5,6 +5,8 @@ local frame = 0
 local finished = false
 local last_10 = 0
 local last_pc = 0
+local last_0100 = 0
+local last_4200 = 0
 local result_path = RESULT_DIR .. "/nmi_probe.json"
 local done_path = RESULT_DIR .. "/done"
 local failed_path = RESULT_DIR .. "/failed"
@@ -13,6 +15,7 @@ local function memtypes()
   local mt = emu.memType or {}
   return {
     wram = mt.snesWorkRam or mt.workRam or mt.snesMemory or mt.cpuMemory,
+    cpu = mt.snesCpuMemory or mt.cpuMemory or mt.snesMemory or mt.snesDebug,
   }
 end
 
@@ -52,6 +55,8 @@ local function write_json(ok)
     f:write("{\"ok\":" .. okj ..
       ",\"frame\":" .. tostring(frame) ..
       ",\"last_10\":" .. tostring(as_num(last_10)) ..
+      ",\"last_0100\":" .. tostring(as_num(last_0100)) ..
+      ",\"last_4200\":" .. tostring(as_num(last_4200)) ..
       ",\"pc\":" .. tostring(as_num(last_pc)) .. "}")
     f:close()
   end
@@ -76,6 +81,10 @@ local function on_frame()
   local mt = memtypes()
   local v = read_byte(0x0010, mt.wram)
   if v ~= nil then last_10 = as_num(v) end
+  local gm = read_byte(0x0100, mt.wram)
+  if gm ~= nil then last_0100 = as_num(gm) end
+  local nmi = read_byte(0x4200, mt.cpu)
+  if nmi ~= nil then last_4200 = as_num(nmi) end
   last_pc = cpu_pc24()
   if last_10 ~= 0 then
     finish(true)
