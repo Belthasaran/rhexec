@@ -37,6 +37,6 @@ Section `id`: `wram`, `vram`, `cgram`, `oam`, `sram`, `spc_aram`, `dsp`, `fillra
 
 ## Consumers
 
-- `rhboot1-sfc` — embed WRAM/VRAM/CGRAM/OAM/ARAM after a reset trampoline; IPL plants a `$FF80` copier then that copies `$0000–$FF7F` (handshake tracks copier X, skip page0 `$F0–$FF` and 0 after wrap); `$0386` SPC resume trampoline (no-`$AA` skip jumps IPL to STOP there); restore INIDISP and `$4200` before jumping to the captured PC
+- `rhboot1-sfc` — embed WRAM/VRAM/CGRAM/OAM/ARAM after a reset trampoline; IPL plants a `$FF80` copier then that copies `$0000–$FF7F` (handshake tracks copier X, skip page0 `$F0–$FF` and 0 after wrap); `$0386` SPC resume trampoline restores `$F8–$FC`, signals `$F4=$A5`/`$F5=$5A`, spins until the CPU overwrites `$F4`, then JMPs the N-SPC timer wait (`MOV Y,$FD` / BEQ) with empty SP `$CF` (not mid-CALL `$11B0`); SNES waits for that sentinel after PPU restore, writes `cpu_regs`, then INIDISP/`$4200`/JML
 - `rhcheat1-yml` — PAR8 WRAM lines
 - `rhlaunch1-mesen` — synthesize a throwaway Mesen `.mss` and `loadSavestate` in one `cpuExec` callback, then `emu.setState` clocks/PPU/HDMA (emulation frozen until the callback returns)

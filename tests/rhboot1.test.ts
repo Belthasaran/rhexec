@@ -57,7 +57,17 @@ function akogareLikeState() {
   const aram = new Uint8Array(0x10000);
   aram[0x11b0] = 0xf4;
   aram[0x11b1] = 0x81;
+  aram[0x0501] = 0xcd;
+  aram[0x0502] = 0xcf;
+  aram[0x0503] = 0xbd;
+  aram[0x0549] = 0xec;
+  aram[0x054a] = 0xfd;
+  aram[0x054b] = 0x00;
+  aram[0x054c] = 0xf0;
+  aram[0x054d] = 0xfb;
   aram[0xf1] = 0x31;
+  aram[0xf8] = 0x84;
+  aram[0xfa] = 0x10;
   const dsp = new Uint8Array(0x80);
   dsp[0x0c] = 0x7f;
   dsp[0x18] = 0x7a; // V1 ENVX — KON is 0 in a capture
@@ -227,10 +237,24 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.deepEqual([...body.subarray(aramOffset + SPC_COPIER_ADDR, aramOffset + SPC_COPIER_ADDR + copier.length)], [...copier]);
   const tramp = spcResumeTrampoline(st);
   assert.equal(tramp.addr, 0x0386);
-  assert.ok(tramp.addr + tramp.bytes.length <= 0x6000, 'trampoline below echo ESA $6000');
-  assert.equal(tramp.pc, 0x11b0);
+  assert.ok(tramp.bytes.length <= 102, 'trampoline fits the $0386 zero run');
+  assert.equal(tramp.pc, 0x0549);
   assert.deepEqual([...body.subarray(aramOffset + 0x0386, aramOffset + 0x0386 + tramp.bytes.length)], [...tramp.bytes]);
-  assert.ok(findSeq(tramp.bytes, [0x5f, 0xb0, 0x11]) >= 0, 'trampoline JMP $11B0');
+  assert.ok(findSeq(tramp.bytes, [0x5f, 0x49, 0x05]) >= 0, 'trampoline JMP $0549 timer wait');
+  assert.equal(findSeq(tramp.bytes, [0x5f, 0xb0, 0x11]), -1, 'does not JMP mid-CALL $11B0');
+  assert.ok(findSeq(tramp.bytes, [0xcd, 0xcf, 0xbd]) >= 0, 'empty stack $CF not capture $CD');
+  assert.ok(findSeq(tramp.bytes, [0x8f, 0xa5, 0xf4]) >= 0, 'trampoline sentinel $A5 on $F4');
+  assert.ok(findSeq(tramp.bytes, [0x8f, 0x5a, 0xf5]) >= 0, 'trampoline sentinel $5A on $F5');
+  assert.ok(findSeq(tramp.bytes, [0x78, 0xa5, 0xf4, 0xf0]) >= 0, 'trampoline spins until CPU overwrites $F4');
+  assert.ok(findSeq(tramp.bytes, [0x8f, 0x84, 0xf8]) >= 0, 'restore $F8');
+  assert.ok(findSeq(tramp.bytes, [0x8f, 0x10, 0xfa]) >= 0, 'restore timer0 target $FA');
+  const waitA5 = findSeq(stub, [0xaf, 0x40, 0x21, 0x00, 0xc9, 0xa5, 0xd0]);
+  const wait5A = findSeq(stub, [0xaf, 0x41, 0x21, 0x00, 0xc9, 0x5a, 0xd0]);
+  assert.ok(waitA5 >= 0, 'CPU waits for trampoline $A5');
+  assert.ok(wait5A >= 0, 'CPU waits for trampoline $5A on $2141');
+  assert.ok(vscroll >= 0 && waitA5 > vscroll, 'sentinel wait is after PPU pokes');
+  assert.ok(waitA5 < staNmi, 'sentinel wait is before $4200');
+  assert.ok(wait5A < staNmi && wait5A > waitA5, '$2141 wait before $4200');
   const dspLd = findSeq(tramp.bytes, [0xf5]);
   assert.ok(dspLd >= 0, 'DSP table MOV A,!abs+X');
   const table = tramp.bytes[dspLd + 1]! | (tramp.bytes[dspLd + 2]! << 8);
@@ -243,10 +267,10 @@ test('SPC trampoline aligns PC even when op_step is set', () => {
   const st = akogareLikeState();
   st.spc = { ...st.spc!, pc: 0x11b1, op_step: 1 };
   const tramp = spcResumeTrampoline(st);
-  assert.equal(tramp.pc, 0x11b0);
+  assert.equal(tramp.pc, 0x0549);
   const { rom: out, aramOffset, stubOffset } = buildBootRestoreRom(makeFixtureRom(), st);
   const body = bodyOf(out);
-  assert.ok(findSeq(body.subarray(aramOffset + tramp.addr, aramOffset + tramp.addr + tramp.bytes.length), [0x5f, 0xb0, 0x11]) >= 0);
+  assert.ok(findSeq(body.subarray(aramOffset + tramp.addr, aramOffset + tramp.addr + tramp.bytes.length), [0x5f, 0x49, 0x05]) >= 0);
   const stub = body.subarray(stubOffset, stubOffset + 0x600);
   assert.ok(findSeq(stub, [0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'success jump dest is copier $FF80');
   assert.ok(findSeq(stub, [0xa9, 0x03, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'skip dest is trampoline not $11B0');
@@ -257,6 +281,14 @@ test('SPC trampoline is $0386 even without DSP echo', () => {
   const aram = new Uint8Array(0x10000);
   aram[0x11b0] = 0xf4;
   aram[0x11b1] = 0x81;
+  aram[0x0501] = 0xcd;
+  aram[0x0502] = 0xcf;
+  aram[0x0503] = 0xbd;
+  aram[0x0549] = 0xec;
+  aram[0x054a] = 0xfd;
+  aram[0x054b] = 0x00;
+  aram[0x054c] = 0xf0;
+  aram[0x054d] = 0xfb;
   const st = makeState(wram, {
     spc: { a: 0, x: 2, y: 0x14, psw: 2, sp: 0xcd, pc: 0x11b1 },
     sections: [
@@ -274,7 +306,7 @@ test('SPC trampoline is $0386 even without DSP echo', () => {
   assert.ok(findSeq(stub, [0xa9, 0x86, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'STA $2142 with skip $86');
   assert.ok(findSeq(stub, [0xa9, 0x03, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'STA $2143 with skip $03 not $60');
   assert.deepEqual([...body.subarray(aramOffset + 0x0386, aramOffset + 0x0386 + tramp.bytes.length)], [...tramp.bytes]);
-  assert.ok(findSeq(body.subarray(aramOffset + 0x0386), [0x5f, 0xb0, 0x11]) >= 0, 'payload at $0386 JMP $11B0');
+  assert.ok(findSeq(body.subarray(aramOffset + 0x0386), [0x5f, 0x49, 0x05]) >= 0, 'payload at $0386 JMP $0549');
   assert.ok(countSeq(stub, [0xa9, 0x00, 0x8f, 0x41, 0x21, 0x00]) >= 1, 'skip-without-AA still has $2141=0 jump kick');
 });
 

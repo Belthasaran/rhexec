@@ -3,6 +3,7 @@
 
 local frame = 0
 local finished = false
+local nmi_frame = 0
 local last_10 = 0
 local last_pc = 0
 local last_spc = 0
@@ -13,10 +14,19 @@ local last_2141 = 0
 local last_spc_y = 0
 local last_spc_a = 0
 local last_spc_x = 0
+local last_spc_sp = 0
 local last_cpu_a = 0
 local last_cpu_p = 0
 local last_dest_lo = 0
 local last_dest_hi = 0
+local last_aram_pc = 0
+local last_aram_11b0 = 0
+local last_aram_0549 = 0
+local last_f1 = 0
+local last_fa = 0
+local last_fd = 0
+local last_stack_ret = 0
+local last_tramp0 = 0
 local result_path = RESULT_DIR .. "/nmi_probe.json"
 local done_path = RESULT_DIR .. "/done"
 local failed_path = RESULT_DIR .. "/failed"
@@ -57,6 +67,7 @@ local function snapshot_state()
   last_spc_y = as_num(st["spc.y"])
   last_spc_a = as_num(st["spc.a"])
   last_spc_x = as_num(st["spc.x"])
+  last_spc_sp = as_num(st["spc.sp"])
   last_cpu_a = as_num(st["cpu.a"])
   last_cpu_p = as_num(st["cpu.ps"] or st["cpu.p"])
 end
@@ -66,9 +77,20 @@ local function spc_region(pc)
   if pc >= 65408 and pc < 65472 then return "copier" end
   if pc >= 902 and pc < 1024 then return "tramp" end
   if pc >= 4528 and pc < 4600 then return "nspc" end
+  if pc >= 1280 and pc < 4864 then return "engine" end
+  if pc >= 7936 and pc < 8192 then return "table1f" end
+  if pc >= 20480 and pc < 32768 then return "seq" end
   if pc >= 65472 then return "iplrom" end
   if pc >= 32768 then return "high" end
   return "other"
+end
+
+local function read_u32(addr, mtype)
+  local b0 = as_num(read_byte(addr, mtype))
+  local b1 = as_num(read_byte(addr + 1, mtype))
+  local b2 = as_num(read_byte(addr + 2, mtype))
+  local b3 = as_num(read_byte(addr + 3, mtype))
+  return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
 end
 
 local function debug_log(hid, msg)
@@ -76,8 +98,8 @@ local function debug_log(hid, msg)
   local f = io.open(DEBUG_LOG_PATH, "a")
   if not f then return end
   f:write(string.format(
-    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcX":%d,"spcA":%d,"cpuA":%d,"cpuP":%d,"destLo":%d,"destHi":%d,"wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d},"timestamp":%d,"runId":"post-fix-038"}\n',
-    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_x), as_num(last_spc_a), as_num(last_cpu_a), as_num(last_cpu_p), as_num(last_dest_lo), as_num(last_dest_hi), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), (os.time() * 1000)
+    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcX":%d,"spcA":%d,"spcSp":%d,"cpuA":%d,"cpuP":%d,"destLo":%d,"destHi":%d,"wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d,"aramPc":%d,"aram11b0":%d,"aram0549":%d,"f1":%d,"fa":%d,"fd":%d,"stackRet":%d,"tramp0":%d},"timestamp":%d,"runId":"post-fix-041"}\n',
+    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_x), as_num(last_spc_a), as_num(last_spc_sp), as_num(last_cpu_a), as_num(last_cpu_p), as_num(last_dest_lo), as_num(last_dest_hi), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), as_num(last_aram_pc), as_num(last_aram_11b0), as_num(last_aram_0549), as_num(last_f1), as_num(last_fa), as_num(last_fd), as_num(last_stack_ret), as_num(last_tramp0), (os.time() * 1000)
   ))
   f:close()
 end
@@ -108,12 +130,25 @@ local function write_json(ok)
   end
 end
 
+local function peek_spc(spcRam)
+  if not spcRam then return end
+  last_aram_pc = read_u32(as_num(last_spc) % 65536, spcRam)
+  last_aram_11b0 = read_u32(0x11b0, spcRam)
+  last_aram_0549 = read_u32(0x0549, spcRam)
+  last_f1 = as_num(read_byte(0xf1, spcRam))
+  last_fa = as_num(read_byte(0xfa, spcRam))
+  last_fd = as_num(read_byte(0xfd, spcRam))
+  last_tramp0 = as_num(read_byte(0x0386, spcRam))
+  local sp = as_num(last_spc_sp) % 256
+  last_stack_ret = as_num(read_byte(0x100 + ((sp + 1) % 256), spcRam)) + 256 * as_num(read_byte(0x100 + ((sp + 2) % 256), spcRam))
+end
+
 local function finish(ok)
   if finished then return end
   finished = true
   snapshot_state()
   write_json(ok)
-  debug_log(ok and "C" or "A", ok and "nmi-ok" or "nmi-timeout")
+  debug_log(ok and "C" or "A", ok and "nmi-timeout-end" or "nmi-timeout")
   stop_emu()
 end
 
@@ -137,14 +172,29 @@ local function on_frame()
   if a0 ~= nil then last_2140 = as_num(a0) end
   local a1 = read_byte(0x2141, mt.cpu)
   if a1 ~= nil then last_2141 = as_num(a1) end
-  if frame == 1 or frame == 60 or frame == 180 or frame == 300 then
+  if frame == 1 or frame == 60 or frame == 180 then
+    peek_spc(spcRam)
     debug_log("B", "frame-snapshot")
   end
-  if last_10 ~= 0 then
-    finish(true)
+  if nmi_frame == 0 and last_10 ~= 0 then
+    nmi_frame = frame
+    peek_spc(spcRam)
+    write_json(true)
+    debug_log("D", "nmi-ok")
+  elseif nmi_frame > 0 then
+    local d = frame - nmi_frame
+    if d == 1 or d == 10 or d == 30 or d == 90 then
+      peek_spc(spcRam)
+      debug_log("E", "post-nmi")
+    end
+    if d >= 90 then
+      finished = true
+      stop_emu()
+    end
     return
   end
   if frame >= TIMEOUT_FRAMES then
+    peek_spc(spcRam)
     finish(false)
   end
 end
