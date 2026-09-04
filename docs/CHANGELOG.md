@@ -1,5 +1,7 @@
 # Changelog
 
+- **0.2.28:** IPL Start is unreachable while dest high bit7 is clear (`$7F00` left the SPC at `$3CBE`). Copier is planted at `$FF80` (bit7 set) and jumped with Y+2, then copies `$0000–$FF7F`. Rebuild the SFC.
+- **0.2.27:** After a full 32KiB IPL transfer Start `JMP [$00]` with leftover dest `$8000` (SPC `$DE42` at frame 1; copier at `$02DD` never ran). IPL now stops at `$7F00` and the copier copies `$7F00–$FFBF`. Rebuild the SFC.
 - **0.2.26:** IPL dest ≥ `$8000` JMP'd into sample RAM mid-page (`$9E43`) while NMI still came up. High ARAM is copied by an SPC routine at `$02DD` (never IPL dest-high). Rebuild the SFC.
 - **0.2.25:** Paged high IPL ack-wait hung the stub (`$40:8260` `CMP $2140`, `$4200=0`) after IPL jumped into sample RAM (`$8560`). Byte waits time out and `BRL` to the trampoline jump; page index X is saved across the wait; `$2141` is forced nonzero after each page. Rebuild the SFC.
 - **0.2.24:** Dest ≥ `$8000` only holds 256 bytes per IPL command (`INC $01` / `BPL` fails). Streaming the high 32KiB in one Trans deadlocked the stub (`CMP $2140`, SPC in RAM e.g. `$F5F2`). High ARAM is 256-byte pages again; last page `$FF00–$FFBF`; jump `$C1`. Rebuild the SFC.

@@ -54,13 +54,23 @@ local function spc_pc16()
   return as_num(st["spc.pc"] or st.spcPc or 0)
 end
 
+local function spc_region(pc)
+  pc = as_num(pc)
+  if pc >= 65408 and pc < 65472 then return "copier" end
+  if pc >= 902 and pc < 1024 then return "tramp" end
+  if pc >= 4528 and pc < 4600 then return "nspc" end
+  if pc >= 65472 then return "iplrom" end
+  if pc >= 32768 then return "high" end
+  return "other"
+end
+
 local function debug_log(hid, msg)
   if not DEBUG_LOG_PATH or DEBUG_LOG_PATH == "" then return end
   local f = io.open(DEBUG_LOG_PATH, "a")
   if not f then return end
   f:write(string.format(
-    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d},"timestamp":%d,"runId":"post-fix-026"}\n',
-    hid, msg, frame, as_num(last_pc), as_num(last_spc), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), (os.time() * 1000)
+    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d},"timestamp":%d,"runId":"post-fix-028"}\n',
+    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), (os.time() * 1000)
   ))
   f:close()
 end

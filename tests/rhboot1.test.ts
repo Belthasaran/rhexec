@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildBootRestoreRom, inidispByte, loromOffset, nmiTimenByte, obselByte, spcHighCopier, spcResumeTrampoline, SPC_COPIER_ADDR } from '../src/boot/boot-restore.ts';
+import { buildBootRestoreRom, inidispByte, iplNextCommandKick, loromOffset, nmiTimenByte, obselByte, spcHighCopier, spcResumeTrampoline, SPC_COPIER_ADDR } from '../src/boot/boot-restore.ts';
 import { reconstructFillram } from '../src/players/mesen-state-map.ts';
 import { emptyCpu, makeFixtureRom, makeState } from './helpers.ts';
 import type { InternalRegs, PpuLayer, PpuState } from '../src/rhstate1/types.ts';
@@ -197,20 +197,21 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.ok(findSeq(stub, [0xcf, 0x40, 0x21, 0x00, 0xf0]) >= 0, 'IPL byte wait is timed (CMP / BEQ)');
   assert.ok(findSeq(stub, [0xa9, 0x11, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'restore APUIO $2140 from cpu_regs');
   assert.ok(findSeq(stub, [0xa9, 0x22, 0x8f, 0x41, 0x21, 0x00]) >= 0, 'restore APUIO $2141 from cpu_regs');
-  assert.ok(findSeq(stub, [0xa9, 0xdd, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'IPL dest low $02DD (high copier)');
-  assert.ok(findSeq(stub, [0xa9, 0x02, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'IPL jump dest high $02DD');
+  assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'IPL dest low $FF80 (copier)');
+  assert.ok(findSeq(stub, [0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'IPL jump dest high $FF80');
   assert.ok(findSeq(stub, [0xa9, 0x86, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'no-AA skip dest low $0386');
   assert.ok(findSeq(stub, [0xa9, 0x03, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'no-AA skip dest high $0386 (low 32KiB, not echo $60)');
   assert.equal(findSeq(stub, [0xa9, 0x60, 0x8f, 0x43, 0x21, 0x00]), -1, 'DSP ESA $60 is not the jump dest');
   assert.ok(countSeq(stub, [0xa9, 0x00, 0x8f, 0x41, 0x21, 0x00]) >= 2, 'jump kicks $2141=0 (copier + no-AA STOP)');
-  assert.equal(countSeq(stub, [0xc0, 0x00, 0x80]), 1, 'low 32KiB streams to CPY #$8000');
-  assert.equal(findSeq(stub, [0xe0, 0x7f, 0x00]), -1, 'no paged IPL CPX #$007F');
-  assert.equal(countSeq(stub, [0xc0, 0xc0, 0x7f]), 1, 'high copier stream CPY #$7FC0');
-  assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'copier jump kick $80 (Y=0 after 32KiB)');
-  assert.equal(findSeq(stub, [0xa9, 0xc1, 0x8f, 0x40, 0x21, 0x00]), -1, 'no IPL jump kick $C1');
+  assert.equal(countSeq(stub, [0xc0, 0x00, 0x80]), 1, 'low 32KiB to copier CPY #$8000');
+  assert.equal(countSeq(stub, [0xc0, 0x80, 0x7f]), 1, 'high stream CPY #$7F80 (stop before copier)');
+  assert.ok(findSeq(stub, [0xb9, 0x80, 0xff]) >= 0, 'plant LDA $FF80,Y');
   const copier = spcHighCopier(0x0386);
-  assert.equal(SPC_COPIER_ADDR, 0x02dd);
-  assert.ok(copier.length < 0x40, 'copier fits in Akogare $02DD zero run');
+  const jumpKick = iplNextCommandKick(copier.length);
+  assert.ok(findSeq(stub, [0xa9, jumpKick, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'jump kick is plant Y+2');
+  assert.equal(findSeq(stub, [0xa9, 0xc1, 0x8f, 0x40, 0x21, 0x00]), -1, 'no IPL jump kick $C1');
+  assert.equal(SPC_COPIER_ADDR, 0xff80);
+  assert.ok(copier.length <= 0x40, 'copier fits below IPL ROM');
   assert.deepEqual([...copier.subarray(copier.length - 3)], [0x5f, 0x86, 0x03], 'copier JMP $0386');
   assert.deepEqual([...body.subarray(aramOffset + SPC_COPIER_ADDR, aramOffset + SPC_COPIER_ADDR + copier.length)], [...copier]);
   const tramp = spcResumeTrampoline(st);
@@ -236,7 +237,7 @@ test('SPC trampoline aligns PC even when op_step is set', () => {
   const body = bodyOf(out);
   assert.ok(findSeq(body.subarray(aramOffset + tramp.addr, aramOffset + tramp.addr + tramp.bytes.length), [0x5f, 0xb0, 0x11]) >= 0);
   const stub = body.subarray(stubOffset, stubOffset + 0x600);
-  assert.ok(findSeq(stub, [0xa9, 0x02, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'success jump dest is copier $02DD');
+  assert.ok(findSeq(stub, [0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'success jump dest is copier $FF80');
   assert.ok(findSeq(stub, [0xa9, 0x03, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'skip dest is trampoline not $11B0');
 });
 
@@ -257,8 +258,8 @@ test('SPC trampoline is $0386 even without DSP echo', () => {
   const { rom: out, aramOffset, stubOffset } = buildBootRestoreRom(makeFixtureRom(), st);
   const body = bodyOf(out);
   const stub = body.subarray(stubOffset, stubOffset + 0x600);
-  assert.ok(findSeq(stub, [0xa9, 0xdd, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'STA $2142 with copier $DD');
-  assert.ok(findSeq(stub, [0xa9, 0x02, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'STA $2143 with copier $02');
+  assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'STA $2142 with copier $80');
+  assert.ok(findSeq(stub, [0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'STA $2143 with copier $FF');
   assert.ok(findSeq(stub, [0xa9, 0x86, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'STA $2142 with skip $86');
   assert.ok(findSeq(stub, [0xa9, 0x03, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'STA $2143 with skip $03 not $60');
   assert.deepEqual([...body.subarray(aramOffset + 0x0386, aramOffset + 0x0386 + tramp.bytes.length)], [...tramp.bytes]);
