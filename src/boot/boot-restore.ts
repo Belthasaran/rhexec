@@ -838,18 +838,6 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   if (stub.length > STUB_CODE_MAX) {
     throw new Error(`boot stub too large (${stub.length} > ${STUB_CODE_MAX})`);
   }
-  // #region agent log
-  {
-    const has = (n: number[]) => {
-      outer: for (let i = 0; i + n.length <= stub.length; i += 1) {
-        for (let j = 0; j < n.length; j += 1) if (stub[i + j] !== n[j]) continue outer;
-        return true;
-      }
-      return false;
-    };
-    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'L', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7f80: has([0xc0, 0x80, 0x7f]), hasStackHs: has([0xa3, 0x01, 0x8f, 0x40, 0x21, 0x00]), hasIncA: has([0x1a, 0xd0]), hasCopierDestHi: has([0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]), hasLdaFf80: has([0xb9, 0x80, 0xff]), hasEchoAck: has([0xcf, 0x40, 0x21, 0x00, 0xd0]), hasEchoTimed: has([0xcf, 0x40, 0x21, 0x00, 0xf0]), hasWaitA5: has([0xc9, 0xa5, 0xd0]), hasWait5A: has([0xc9, 0x5a, 0xd0]) }, timestamp: Date.now(), runId: 'post-fix-044' }) }).catch(() => {});
-  }
-  // #endregion
 
   const stubBankBytes = new Uint8Array(LOROM_BANK);
   stubBankBytes.set(stub);
@@ -859,10 +847,7 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
 
   const payload = new Uint8Array(PAYLOAD_BANKS * LOROM_BANK);
   const wramOut = pad(wram, 0x20000);
-  const song = holdLevelMusicPort(wramOut);
-  // #region agent log
-  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'L', location: 'boot-restore.ts:holdLevelMusicPort', message: 'wram music', data: { dda: wramOut[0x0dda], dfb: wramOut[0x1dfb], dff: wramOut[0x1dff], song }, timestamp: Date.now(), runId: 'post-fix-044' }) }).catch(() => {});
-  // #endregion
+  holdLevelMusicPort(wramOut);
   payload.set(wramOut, 0);
   payload.set(pad(getSectionDecoded(work, 'vram'), 0x10000), WRAM_BANKS * LOROM_BANK);
   const aramPayload = pad(getSectionDecoded(work, 'spc_aram'), 0x10000);
@@ -886,9 +871,6 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   if (spcTramp.addr + spcTramp.bytes.length <= aramPayload.length) {
     aramPayload.set(spcTramp.bytes, spcTramp.addr);
   }
-  // #region agent log
-    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'I', location: 'boot-restore.ts:aramOverlay', message: 'aram overlay', data: { copierAddr: SPC_COPIER_ADDR, copierLen: copier.length, jumpKick: (copier.length + 2) & 0xff, trampAddr: spcTramp.addr, trampLen: spcTramp.bytes.length, trampSpin: spcTramp.bytes.includes(0x78) && spcTramp.bytes.includes(0xf4), tramp5A: [...spcTramp.bytes].some((_, i, a) => a[i] === 0x8f && a[i + 1] === 0x5a && a[i + 2] === 0xf5), hasSongArm: song !== 0 && [...spcTramp.bytes].some((_, i, a) => a[i] === 0x8f && a[i + 1] === 0 && a[i + 2] === 6) && [...spcTramp.bytes].some((_, i, a) => a[i] === 0x8f && a[i + 1] === song && a[i + 2] === 2), hasClear0386: [...spcTramp.bytes].some((_, i, a) => a[i] === 0xc5 && a[i + 1] === 0x86 && a[i + 2] === 0x03), aram02: aramPayload[2], aram06: aramPayload[6], song, hasSkipF0: copier.includes(0xf0) && [...copier].includes(0x68), copierHead: [aramPayload[SPC_COPIER_ADDR], aramPayload[SPC_COPIER_ADDR + 1], aramPayload[SPC_COPIER_ADDR + 2]], copierJmp: [aramPayload[SPC_COPIER_ADDR + copier.length - 3], aramPayload[SPC_COPIER_ADDR + copier.length - 2], aramPayload[SPC_COPIER_ADDR + copier.length - 1]], trampJmp: [aramPayload[spcTramp.addr + spcTramp.bytes.length - 3], aramPayload[spcTramp.addr + spcTramp.bytes.length - 2], aramPayload[spcTramp.addr + spcTramp.bytes.length - 1]] }, timestamp: Date.now(), runId: 'post-fix-044' }) }).catch(() => {});
-  // #endregion
   payload.set(aramPayload, (WRAM_BANKS + VRAM_BANKS) * LOROM_BANK);
 
   const minLen = (origBanks + 1 + PAYLOAD_BANKS) * LOROM_BANK;
