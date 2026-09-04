@@ -206,6 +206,7 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.ok(findSeq(stub, [0xa9, 0x03, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'no-AA skip dest high $0386 (low 32KiB, not echo $60)');
   assert.equal(findSeq(stub, [0xa9, 0x60, 0x8f, 0x43, 0x21, 0x00]), -1, 'DSP ESA $60 is not the jump dest');
   assert.ok(countSeq(stub, [0xa9, 0x00, 0x8f, 0x41, 0x21, 0x00]) >= 2, 'jump kicks $2141=0 (copier + no-AA STOP)');
+  assert.equal(countSeq(stub, [0xc0, 0x00, 0x00]), 1, 'only the low stream allows handshake 0');
   assert.equal(countSeq(stub, [0xc0, 0x00, 0x80]), 1, 'low 32KiB to copier CPY #$8000');
   assert.equal(countSeq(stub, [0xc0, 0x80, 0x7f]), 1, 'high stream CPY #$7F80 (stop before copier)');
   assert.ok(findSeq(stub, [0xb9, 0x80, 0xff]) >= 0, 'plant LDA $FF80,Y');
