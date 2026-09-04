@@ -1,5 +1,6 @@
 # Changelog
 
+- **0.2.30:** Copier at `$FF80` ran and the infinite wait held both sides, but after the first 256-byte page (`INC $01` at `$FF95`) they deadlocked (`$FF8A` / `$40:82AA`, `$7E0010` stayed 0). Bulk copy now uses a 0/1 `$2140` toggle so the handshake never wraps with dest. Rebuild the SFC.
 - **0.2.29:** Copier at `$FF80` ran (`$FF8A`) but the SNES timed wait fell through after 65536 loops, so `$4200` came up with the APU still in the copier. Copier-fed bytes spin until echo. Rebuild the SFC.
 - **0.2.28:** IPL Start is unreachable while dest high bit7 is clear (`$7F00` left the SPC at `$3CBE`). Copier is planted at `$FF80` (bit7 set) and jumped with Y+2, then copies `$0000–$FF7F`. Rebuild the SFC.
 - **0.2.27:** After a full 32KiB IPL transfer Start `JMP [$00]` with leftover dest `$8000` (SPC `$DE42` at frame 1; copier at `$02DD` never ran). IPL now stops at `$7F00` and the copier copies `$7F00–$FFBF`. Rebuild the SFC.

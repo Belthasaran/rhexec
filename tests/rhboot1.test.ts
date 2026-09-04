@@ -195,6 +195,7 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.ok(findSeq(stub, [0xc9, 0xaa]) >= 0, 'IPL waits for $AA');
   assert.ok(findSeq(stub, [0x8f, 0x42, 0x21, 0x00]) >= 0, 'IPL writes dest $2142');
   assert.ok(findSeq(stub, [0xcf, 0x40, 0x21, 0x00, 0xd0]) >= 0, 'copier-fed stream waits infinitely (CMP / BNE)');
+  assert.ok(findSeq(stub, [0x8a, 0x49, 0x01, 0xaa]) >= 0, 'copier-fed stream toggles $2140 (TXA EOR #$01 TAX)');
   assert.ok(findSeq(stub, [0xcf, 0x40, 0x21, 0x00, 0xf0]) >= 0, 'plant stream wait is still timed (CMP / BEQ)');
   assert.ok(findSeq(stub, [0xa9, 0x11, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'restore APUIO $2140 from cpu_regs');
   assert.ok(findSeq(stub, [0xa9, 0x22, 0x8f, 0x41, 0x21, 0x00]) >= 0, 'restore APUIO $2141 from cpu_regs');
@@ -213,6 +214,8 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.equal(findSeq(stub, [0xa9, 0xc1, 0x8f, 0x40, 0x21, 0x00]), -1, 'no IPL jump kick $C1');
   assert.equal(SPC_COPIER_ADDR, 0xff80);
   assert.ok(copier.length <= 0x40, 'copier fits below IPL ROM');
+  assert.ok(findSeq(copier, [0xc7, 0x00]) >= 0, 'copier MOV [$00],A (Y is toggle)');
+  assert.ok(findSeq(copier, [0x48, 0x01]) >= 0, 'copier EOR A,#$01');
   assert.deepEqual([...copier.subarray(copier.length - 3)], [0x5f, 0x86, 0x03], 'copier JMP $0386');
   assert.deepEqual([...body.subarray(aramOffset + SPC_COPIER_ADDR, aramOffset + SPC_COPIER_ADDR + copier.length)], [...copier]);
   const tramp = spcResumeTrampoline(st);

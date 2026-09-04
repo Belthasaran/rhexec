@@ -10,6 +10,9 @@ local last_0100 = 0
 local last_4200 = 0
 local last_2140 = 0
 local last_2141 = 0
+local last_spc_y = 0
+local last_spc_a = 0
+local last_cpu_a = 0
 local result_path = RESULT_DIR .. "/nmi_probe.json"
 local done_path = RESULT_DIR .. "/done"
 local failed_path = RESULT_DIR .. "/failed"
@@ -38,20 +41,17 @@ local function as_num(n)
   return tonumber(n) or 0
 end
 
-local function cpu_pc24()
-  if not emu.getState then return 0 end
+local function snapshot_state()
+  if not emu.getState then return end
   local ok, st = pcall(emu.getState)
-  if not ok or type(st) ~= "table" then return 0 end
+  if not ok or type(st) ~= "table" then return end
   local pc16 = as_num(st["cpu.pc"] or st.pc)
   local k = as_num(st["cpu.k"])
-  return ((k % 256) * 65536) + (pc16 % 65536)
-end
-
-local function spc_pc16()
-  if not emu.getState then return 0 end
-  local ok, st = pcall(emu.getState)
-  if not ok or type(st) ~= "table" then return 0 end
-  return as_num(st["spc.pc"] or st.spcPc or 0)
+  last_pc = ((k % 256) * 65536) + (pc16 % 65536)
+  last_spc = as_num(st["spc.pc"] or st.spcPc or 0)
+  last_spc_y = as_num(st["spc.y"])
+  last_spc_a = as_num(st["spc.a"])
+  last_cpu_a = as_num(st["cpu.a"])
 end
 
 local function spc_region(pc)
@@ -69,8 +69,8 @@ local function debug_log(hid, msg)
   local f = io.open(DEBUG_LOG_PATH, "a")
   if not f then return end
   f:write(string.format(
-    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d},"timestamp":%d,"runId":"post-fix-029"}\n',
-    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), (os.time() * 1000)
+    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcA":%d,"cpuA":%d,"wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d},"timestamp":%d,"runId":"post-fix-030"}\n',
+    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_a), as_num(last_cpu_a), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), (os.time() * 1000)
   ))
   f:close()
 end
@@ -104,8 +104,7 @@ end
 local function finish(ok)
   if finished then return end
   finished = true
-  last_pc = cpu_pc24()
-  last_spc = spc_pc16()
+  snapshot_state()
   write_json(ok)
   debug_log(ok and "C" or "A", ok and "nmi-ok" or "nmi-timeout")
   stop_emu()
@@ -121,8 +120,7 @@ local function on_frame()
   if gm ~= nil then last_0100 = as_num(gm) end
   local nmi = read_byte(0x4200, mt.cpu)
   if nmi ~= nil then last_4200 = as_num(nmi) end
-  last_pc = cpu_pc24()
-  last_spc = spc_pc16()
+  snapshot_state()
   local a0 = read_byte(0x2140, mt.cpu)
   if a0 ~= nil then last_2140 = as_num(a0) end
   local a1 = read_byte(0x2141, mt.cpu)
