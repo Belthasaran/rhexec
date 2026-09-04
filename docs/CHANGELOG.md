@@ -1,5 +1,6 @@
 # Changelog
 
+- **0.2.26:** IPL dest ≥ `$8000` JMP'd into sample RAM mid-page (`$9E43`) while NMI still came up. High ARAM is copied by an SPC routine at `$02DD` (never IPL dest-high). Rebuild the SFC.
 - **0.2.25:** Paged high IPL ack-wait hung the stub (`$40:8260` `CMP $2140`, `$4200=0`) after IPL jumped into sample RAM (`$8560`). Byte waits time out and `BRL` to the trampoline jump; page index X is saved across the wait; `$2141` is forced nonzero after each page. Rebuild the SFC.
 - **0.2.24:** Dest ≥ `$8000` only holds 256 bytes per IPL command (`INC $01` / `BPL` fails). Streaming the high 32KiB in one Trans deadlocked the stub (`CMP $2140`, SPC in RAM e.g. `$F5F2`). High ARAM is 256-byte pages again; last page `$FF00–$FFBF`; jump `$C1`. Rebuild the SFC.
 - **0.2.23:** Dest ≥ `$8000` is still the same IPL transfer: after 32KiB, Y=0 vs leftover `$FF` `BPL`s back into Trans, so a new command per high byte desynced ARAM (PC in junk at e.g. `$E0E9`). High half continues the dest `$0000` stream through `$FFBF`; jump kick `$C1`. Trampoline copies DSP regs and write-triggers KON from ENVX (captured KON is 0). Rebuild the SFC.

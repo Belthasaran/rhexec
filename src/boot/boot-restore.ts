@@ -132,12 +132,6 @@ function packDmaRegs(state: RhState1): Uint8Array {
   return table;
 }
 
-/**
- * After $FFBF the IPL index is $C0. Signed `CMP Y,$F4` / `BPL` needs $2140 > $C0
- * (e.g. $C1), not $80 — (int8)$C0 < (int8)$80 is false.
- */
-const IPL_JUMP_KICK = 0xc1;
-
 /** Spin until $2140 equals value (no timeout). */
 function emitWait2140Ack(bytes: number[], value: number): void {
   const loop = bytes.length;
@@ -193,9 +187,9 @@ function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean,
 }
 
 /**
- * One IPL transfer, index = Y&$FF. Dest $0000 streams 32KiB; IPL INC $01 to $80
- * and the dest-high `BPL` fails. Dest ≥ $8000 then holds only 256 bytes per
- * command — a second 32KiB stream waits forever (CPU CMP $2140, SPC in RAM).
+ * Index = Y&$FF, data on $2141. Dest $0000 IPL streams 32KiB then dest-high
+ * `BPL` fails. High ARAM is the same loop fed to the $02DD copier (never IPL
+ * dest ≥ $8000 — that JMPs into sample RAM).
  */
 function emitIplStream(bytes: number[], count: number, jumpBrls?: number[]): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0
@@ -216,79 +210,6 @@ function emitIplStream(bytes: number[], count: number, jumpBrls?: number[]): voi
   patchRel8(bytes, bneByte + 1, byteLoop);
 }
 
-/** 256-byte IPL page. Index is Y low; exits when Y low wraps. Y is 16-bit. */
-function emitIplIndexPage(bytes: number[], jumpBrls?: number[]): void {
-  const byteLoop = bytes.length;
-  bytes.push(
-    0xb9, 0x00, 0x80,       // LDA $8000,Y
-    0x8f, 0x41, 0x21, 0x00, // STA $002141
-    0x98,                   // TYA
-    0x8f, 0x40, 0x21, 0x00, // STA $002140
-    0xda,                   // PHX — timed wait clobbers X (page index)
-  );
-  emitWaitEcho(bytes, jumpBrls);
-  bytes.push(0xfa); // PLX
-  bytes.push(0xc8, 0x98); // INY / TYA (Y low)
-  const bne = bytes.length;
-  bytes.push(0xd0, 0x00);
-  patchRel8(bytes, bne + 1, byteLoop);
-  ldaSta(bytes, 0x01, 0x2141); // leftover data=0 must not IPL-jump dest
-}
-
-/**
- * High ARAM: first 256 bytes continue dest $8000, then one new command per
- * 256-byte page ($8100–$FE00), last page $FF00–$FFBF, jump kick $C1.
- */
-function emitIplHighPaged(bytes: number[], jumpBrls?: number[]): void {
-  bytes.push(0xa0, 0x00, 0x00); // LDY #0  dest $8000 page
-  emitIplIndexPage(bytes, jumpBrls);
-  bytes.push(0xa2, 0x01, 0x00); // LDX #$0001  dest $8100
-  const pageLoop = bytes.length;
-  ldaSta(bytes, 0x00, 0x2142);
-  bytes.push(
-    0x8a,                   // TXA
-    0x18, 0x69, 0x80,       // CLC ADC #$80
-    0x8f, 0x43, 0x21, 0x00, // STA $002143
-  );
-  ldaSta(bytes, 0x01, 0x2141);
-  ldaSta(bytes, 0x80, 0x2140);
-  bytes.push(0xda); // PHX
-  emitWait2140(bytes, 0x80, jumpBrls);
-  bytes.push(0xfa); // PLX
-  bytes.push(
-    0xc2, 0x20,             // REP #$20
-    0x8a,                   // TXA
-    0xeb,                   // XBA  Y = page << 8
-    0xa8,                   // TAY
-    0xe2, 0x20,             // SEP #$20
-  );
-  emitIplIndexPage(bytes, jumpBrls);
-  bytes.push(
-    0xe8,                   // INX
-    0xe0, 0x7f, 0x00,       // CPX #$007F
-  );
-  const bnePage = bytes.length;
-  bytes.push(0xd0, 0x00);
-  patchRel8(bytes, bnePage + 1, pageLoop);
-  emitIplKick(bytes, 0xff00, 0x80, true, jumpBrls);
-  bytes.push(0xa0, 0x00, 0x7f); // LDY #$7F00
-  const lastLoop = bytes.length;
-  bytes.push(
-    0xb9, 0x00, 0x80,
-    0x8f, 0x41, 0x21, 0x00,
-    0x98,
-    0x8f, 0x40, 0x21, 0x00,
-  );
-  emitWaitEcho(bytes, jumpBrls);
-  bytes.push(
-    0xc8,
-    0xc0, 0xc0, 0x7f,       // CPY #$7FC0
-  );
-  const bneLast = bytes.length;
-  bytes.push(0xd0, 0x00);
-  patchRel8(bytes, bneLast + 1, lastLoop);
-}
-
 function patchRel8(bytes: number[], offsetByte: number, target: number): void {
   const rel = target - (offsetByte + 1);
   if (rel < -128 || rel > 127) throw new Error(`rel8 out of range (${rel})`);
@@ -301,8 +222,58 @@ function patchRel16(bytes: number[], offsetLo: number, target: number): void {
   bytes[offsetLo + 1] = (rel >> 8) & 0xff;
 }
 
+/** Below echo. Akogare has 86 zeros at $02DD. Copies $8000–$FFBF then JMP trampoline. */
+export const SPC_COPIER_ADDR = 0x02dd;
+
 /** Below echo ($6000) and IPL ROM. Akogare has 102 zeros at $0386 in the first 32KiB. */
 export const SPC_TRAMPOLINE_ADDR = 0x0386;
+
+export function spcHighCopier(trampAddr: number): Uint8Array {
+  const bytes: number[] = [
+    0x8f, 0x00, 0x00, // MOV $00,#$00
+    0x8f, 0x80, 0x01, // MOV $01,#$80
+    0x8d, 0x00,       // MOV Y,#$00
+  ];
+  const wait = bytes.length;
+  bytes.push(0x7e, 0xf4); // CMP Y,$F4
+  const bneWait = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bneWait + 1, wait);
+  bytes.push(
+    0xe4, 0xf5, // MOV A,$F5
+    0xcb, 0xf4, // MOV $F4,Y
+    0xd7, 0x00, // MOV [$00]+Y,A
+    0xfc,       // INC Y
+  );
+  const bnePage = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bnePage + 1, wait);
+  bytes.push(
+    0xab, 0x01, // INC $01
+    0xe4, 0x01, // MOV A,$01
+    0x68, 0xff, // CMP A,#$FF
+  );
+  const bneHi = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bneHi + 1, wait);
+  const waitff = bytes.length;
+  bytes.push(0x7e, 0xf4);
+  const bneFf = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bneFf + 1, waitff);
+  bytes.push(
+    0xe4, 0xf5,
+    0xcb, 0xf4,
+    0xd7, 0x00,
+    0xfc,
+    0xad, 0xc0, // CMP Y,#$C0
+  );
+  const bneLast = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bneLast + 1, waitff);
+  bytes.push(0x5f, trampAddr & 0xff, (trampAddr >> 8) & 0xff);
+  return Uint8Array.from(bytes);
+}
 
 export function spcTrampolineAddr(_state?: RhState1): number {
   return SPC_TRAMPOLINE_ADDR;
@@ -400,6 +371,7 @@ function dspPokeForState(state: RhState1, aram: Uint8Array): SpcDspPoke | null {
   const echoLen = edl === 0 ? 0 : edl * 0x800;
   const table = findAramZeroRun(aram, 0x80, [
     [0, 0x100],
+    [SPC_COPIER_ADDR, SPC_COPIER_ADDR + 0x40],
     [SPC_TRAMPOLINE_ADDR, SPC_TRAMPOLINE_ADDR + 0x80],
     [esa, esa + echoLen],
     [0xffc0, 0x10000],
@@ -409,13 +381,11 @@ function dspPokeForState(state: RhState1, aram: Uint8Array): SpcDspPoke | null {
 }
 
 /**
- * SPC IPL: dest $0000 streams 32KiB. Dest ≥ $8000 is 256-byte pages (new
- * command after Y wraps — a second 32KiB stream deadlocks). Last page
- * $FF00–$FFBF, jump kick $C1 (Y=$C0). Trampoline at $0386. No-$AA skip
- * jumps IPL to $0386 ($2141=0).
+ * SPC IPL dest $0000 streams 32KiB (includes high copier at $02DD). Jump to the
+ * copier (kick $80, Y=0); it copies $8000–$FFBF without dest-high IPL JMP, then
+ * JMP $0386 trampoline. No-$AA skip jumps IPL to $0386.
  */
-function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuRegs?: number[]): void {
-  const jumpBrls: number[] = [];
+function emitSpcIplUpload(bytes: number[], aramBank: number, cpuRegs?: number[]): void {
   bytes.push(0xc2, 0x10); // REP #$10
   bytes.push(0x8b); // PHB — both success and skip PLB
   bytes.push(0xa0, 0x20, 0x00); // LDY #$0020 timeout outer
@@ -438,13 +408,16 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
   patchRel8(bytes, bneInner + 1, inner);
   patchRel8(bytes, bneOuter + 1, outer);
 
+  const jump32: number[] = [];
+  const jumpHi: number[] = [];
   bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
-  emitIplKick(bytes, 0x0000, 0xcc, true, jumpBrls);
-  emitIplStream(bytes, 0x8000, jumpBrls);
-  bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  emitIplHighPaged(bytes, jumpBrls);
+  emitIplKick(bytes, 0x0000, 0xcc, true, jump32);
+  emitIplStream(bytes, 0x8000, jump32);
   const doJump = bytes.length;
-  emitIplKick(bytes, spcPc & 0xffff, IPL_JUMP_KICK, false);
+  emitIplKick(bytes, SPC_COPIER_ADDR, 0x80, false);
+  bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
+  emitIplStream(bytes, 0x7fc0, jumpHi);
+  const afterHi = bytes.length;
   const regs = cpuRegs ?? [0, 0, 0, 0];
   for (let i = 0; i < 4; i += 1) {
     ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);
@@ -460,7 +433,8 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
   const endIpl = bytes.length;
   bytes[braEnd + 1] = (endIpl - (braEnd + 2)) & 0xff;
   patchRel16(bytes, brlSkip + 1, skip);
-  for (const off of jumpBrls) patchRel16(bytes, off, doJump);
+  for (const off of jump32) patchRel16(bytes, off, doJump);
+  for (const off of jumpHi) patchRel16(bytes, off, afterHi);
   bytes.push(0xe2, 0x10); // SEP #$10
 }
 
@@ -646,8 +620,7 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
   }
 
   const aramBank = (bank + WRAM_BANKS + VRAM_BANKS) & 0xff;
-  const tramp = spcResumeTrampoline(state);
-  emitSpcIplUpload(bytes, aramBank, tramp.addr, state.spc?.cpu_regs);
+  emitSpcIplUpload(bytes, aramBank, state.spc?.cpu_regs);
 
   emitPpuPokes(bytes, state);
   emitCpuMmio(bytes, state, stubBank);
@@ -709,7 +682,7 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
       }
       return false;
     };
-    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'D', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasLdx1: has([0xa2, 0x01, 0x00]), hasCpx7f: has([0xe0, 0x7f, 0x00]), hasJumpC1: has([0xa9, 0xc1, 0x8f, 0x40, 0x21, 0x00]), hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7fc0: has([0xc0, 0xc0, 0x7f]), hasKick80: has([0xa9, 0x80, 0x8f, 0x40, 0x21, 0x00]) }, timestamp: Date.now(), runId: 'pre-fix' }) }).catch(() => {});
+    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'A', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasLdx1: has([0xa2, 0x01, 0x00]), hasCpx7f: has([0xe0, 0x7f, 0x00]), hasJumpC1: has([0xa9, 0xc1, 0x8f, 0x40, 0x21, 0x00]), hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7fc0: has([0xc0, 0xc0, 0x7f]), hasKick80: has([0xa9, 0x80, 0x8f, 0x40, 0x21, 0x00]), hasCopierDest: has([0xa9, 0xdd, 0x8f, 0x42, 0x21, 0x00]), hasCopierHi: has([0xa9, 0x02, 0x8f, 0x43, 0x21, 0x00]) }, timestamp: Date.now(), runId: 'post-fix-026' }) }).catch(() => {});
   }
   // #endregion
 
@@ -725,11 +698,9 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   const aramPayload = pad(getSectionDecoded(work, 'spc_aram'), 0x10000);
   const dspPoke = dspPokeForState(work, aramPayload);
   const spcTramp = spcResumeTrampoline(work, dspPoke);
-  if (spcTramp.addr < aramPayload.length) {
-    aramPayload[spcTramp.addr] = 0xff; // STOP if IPL jumps here without overlay
-  }
-  if (spcTramp.addr + spcTramp.bytes.length <= aramPayload.length) {
-    aramPayload.set(spcTramp.bytes, spcTramp.addr);
+  const copier = spcHighCopier(spcTramp.addr);
+  if (SPC_COPIER_ADDR + copier.length <= aramPayload.length) {
+    aramPayload.set(copier, SPC_COPIER_ADDR);
   }
   if (dspPoke) {
     const dsp = getSectionDecoded(work, 'dsp');
@@ -745,6 +716,9 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   if (spcTramp.addr + spcTramp.bytes.length <= aramPayload.length) {
     aramPayload.set(spcTramp.bytes, spcTramp.addr);
   }
+  // #region agent log
+  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'E', location: 'boot-restore.ts:aramOverlay', message: 'aram overlay', data: { copierAddr: SPC_COPIER_ADDR, copierLen: copier.length, trampAddr: spcTramp.addr, trampLen: spcTramp.bytes.length, copierHead: [aramPayload[SPC_COPIER_ADDR], aramPayload[SPC_COPIER_ADDR + 1], aramPayload[SPC_COPIER_ADDR + 2]], copierJmp: [aramPayload[SPC_COPIER_ADDR + copier.length - 3], aramPayload[SPC_COPIER_ADDR + copier.length - 2], aramPayload[SPC_COPIER_ADDR + copier.length - 1]], trampJmp: [aramPayload[spcTramp.addr + spcTramp.bytes.length - 3], aramPayload[spcTramp.addr + spcTramp.bytes.length - 2], aramPayload[spcTramp.addr + spcTramp.bytes.length - 1]] }, timestamp: Date.now(), runId: 'post-fix-026' }) }).catch(() => {});
+  // #endregion
   payload.set(aramPayload, (WRAM_BANKS + VRAM_BANKS) * LOROM_BANK);
 
   const minLen = (origBanks + 1 + PAYLOAD_BANKS) * LOROM_BANK;
