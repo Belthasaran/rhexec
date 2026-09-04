@@ -311,6 +311,53 @@ test('SPC trampoline is $0386 even without DSP echo', () => {
   assert.ok(countSeq(stub, [0xa9, 0x00, 0x8f, 0x41, 0x21, 0x00]) >= 1, 'skip-without-AA still has $2141=0 jump kick');
 });
 
+test('SPC trampoline relocates off a short $0386 hole (Invictus-like)', () => {
+  const wram = new Uint8Array(0x20000);
+  wram[0x0dda] = 0x96;
+  wram[0x1dfb] = 0x96;
+  const aram = new Uint8Array(0x10000);
+  aram.fill(0x11);
+  aram.fill(0, 0x0386, 0x038d);
+  aram[0x038d] = 9;
+  aram.fill(0, 0x6b81, 0x6b81 + 217);
+  aram[0x060d] = 0xd0;
+  aram[0x060e] = 0xf8;
+  aram[6] = 0x0a;
+  const dsp = new Uint8Array(0x80);
+  dsp[0x6d] = 0xb8;
+  dsp[0x7d] = 9;
+  dsp[0x0c] = 0x7f;
+  dsp[8] = 125;
+  const st = makeState(wram, {
+    spc: {
+      a: 0xe4, x: 3, y: 9, psw: 0x80, sp: 0xcc, pc: 0x060d,
+      cpu_regs: [0, 0, 10, 0],
+    },
+    sections: [
+      { id: 'wram', bus: 0x7e0000, encoding: 'raw', data: wram },
+      { id: 'spc_aram', bus: 0, encoding: 'raw', data: aram },
+      { id: 'dsp', bus: 0, encoding: 'raw', data: dsp },
+    ],
+  });
+  const tramp = spcResumeTrampoline(st);
+  assert.equal(tramp.addr, 0x6b81);
+  assert.equal(tramp.pc, 0x060d);
+  assert.equal(findSeq(tramp.bytes, [0x8f, 0x96, 0x02]), -1, 'does not arm N-SPC $02');
+  const { rom: out, aramOffset, stubOffset } = buildBootRestoreRom(makeFixtureRom(), st);
+  const body = bodyOf(out);
+  assert.equal(body[aramOffset + 0x038d], 9, 'engine byte at $038D preserved');
+  assert.deepEqual(
+    [...body.subarray(aramOffset + tramp.addr, aramOffset + tramp.addr + tramp.bytes.length)],
+    [...tramp.bytes],
+  );
+  const stub = body.subarray(stubOffset, stubOffset + 0x700);
+  const copier = spcHighCopier(tramp.addr);
+  assert.deepEqual([...copier.slice(-3)], [0x5f, 0x81, 0x6b], 'copier JMP $6B81');
+  assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'no-AA skip dest is $FF80');
+  assert.ok(findSeq(stub, [0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'no-AA skip dest high $FF80');
+  assert.equal(findSeq(stub, [0xa9, 0x96, 0x8f, 0x42, 0x21, 0x00]), -1, 'does not hold $96 on $2142');
+});
+
 test('obselByte packs Mesen OamMode/base/offset into $2101', () => {
   assert.equal(obselByte({ oam_mode: 0, oam_base: 24576, oam_address_offset: 4096 }), 0x03);
   assert.equal(obselByte({ oam_mode: 3, oam_base: 0x4000, oam_address_offset: 0x3000 }), 0x72);

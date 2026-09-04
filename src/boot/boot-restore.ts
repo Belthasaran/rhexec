@@ -407,8 +407,79 @@ export function spcHighCopier(trampAddr: number): Uint8Array {
   return Uint8Array.from(bytes);
 }
 
-export function spcTrampolineAddr(_state?: RhState1): number {
-  return SPC_TRAMPOLINE_ADDR;
+function rangeIsZero(aram: Uint8Array, start: number, len: number): boolean {
+  if (start < 0 || start + len > aram.length) return false;
+  for (let i = 0; i < len; i += 1) {
+    if (aram[start + i] !== 0) return false;
+  }
+  return true;
+}
+
+function rangesOverlap(start: number, len: number, forbidden: [number, number][]): boolean {
+  const end = start + len;
+  return forbidden.some(([a, b]) => start < b && a < end);
+}
+
+function echoRange(state: RhState1): [number, number] {
+  const dsp = getSectionDecoded(state, 'dsp');
+  if (!dsp || dsp.length < 0x80) return [0x10000, 0x10000];
+  const esa = (dsp[0x6d] ?? 0) << 8;
+  const edl = (dsp[0x7d] ?? 0) & 0x0f;
+  const echoLen = edl === 0 ? 0 : edl * 0x800;
+  return [esa, esa + echoLen];
+}
+
+function spcHoleForbidden(state: RhState1, extra: [number, number][]): [number, number][] {
+  const [esa, echoEnd] = echoRange(state);
+  return [
+    [0, 0x100],
+    [SPC_COPIER_ADDR, 0xffc0],
+    [esa, echoEnd],
+    [0xffc0, 0x10000],
+    ...extra,
+  ];
+}
+
+function pickZeroRun(aram: Uint8Array, need: number, forbidden: [number, number][]): number {
+  if (rangeIsZero(aram, SPC_TRAMPOLINE_ADDR, need) && !rangesOverlap(SPC_TRAMPOLINE_ADDR, need, forbidden)) {
+    return SPC_TRAMPOLINE_ADDR;
+  }
+  return findAramZeroRun(aram, need, forbidden);
+}
+
+export function chooseSpcResumeSlots(state: RhState1): { trampAddr: number; poke: SpcDspPoke | null } {
+  const aram = pad(getSectionDecoded(state, 'spc_aram') ?? new Uint8Array(0), 0x10000);
+  const coreLen = assembleSpcResumeBytes(state, null).bytes.length;
+  const pokeLen = assembleSpcResumeBytes(state, { table: 0x200, kon: 0 }).bytes.length;
+  const baseForbidden = spcHoleForbidden(state, []);
+  const dsp = getSectionDecoded(state, 'dsp');
+  const withPokeAddr = pickZeroRun(aram, pokeLen, baseForbidden);
+  if (withPokeAddr >= 0) {
+    const trampEnd = withPokeAddr + pokeLen;
+    if (
+      dsp
+      && dsp.length >= 0x80
+      && rangeIsZero(aram, trampEnd, 0x80)
+      && !rangesOverlap(trampEnd, 0x80, baseForbidden)
+    ) {
+      return { trampAddr: withPokeAddr, poke: { table: trampEnd, kon: konRestart(dsp, state.dsp_voices) } };
+    }
+    const poke = dspPokeForState(state, aram, [[withPokeAddr, trampEnd]]);
+    if (poke) return { trampAddr: withPokeAddr, poke };
+  }
+  const coreAddr = pickZeroRun(aram, coreLen, baseForbidden);
+  if (coreAddr < 0) {
+    throw new Error(
+      `no ${coreLen}-byte ARAM zero run for SPC trampoline (page0/echo/IPL excluded; $0386 only fits if it is unused)`,
+    );
+  }
+  return { trampAddr: coreAddr, poke: null };
+}
+
+/** Prefer `$0386` when that hole is long enough; otherwise a captured zero run. */
+export function spcTrampolineAddr(state?: RhState1): number {
+  if (!state) return SPC_TRAMPOLINE_ADDR;
+  return chooseSpcResumeSlots(state).trampAddr;
 }
 
 function findBytes(hay: Uint8Array, needle: number[]): number {
@@ -471,12 +542,11 @@ export interface SpcDspPoke {
  * spins until the CPU overwrites $F4, then X/Y/A and JMP the timer wait (not
  * mid-CALL $11B0 — that RET'd into data).
  */
-export function spcResumeTrampoline(state: RhState1, dspPoke?: SpcDspPoke | null): { addr: number; bytes: Uint8Array; pc: number } {
+function assembleSpcResumeBytes(state: RhState1, poke: SpcDspPoke | null): { bytes: Uint8Array; pc: number } {
   const aram = getSectionDecoded(state, 'spc_aram');
   const spc = state.spc;
   const wait = findNspcTimerWait(aram);
   const pc = wait >= 0 ? wait : alignSpcFetchPc(aram, spc?.pc ?? 0);
-  const addr = spcTrampolineAddr(state);
   const psw = (spc?.psw ?? 0) & 0xff;
   const sp = (wait >= 0 ? findNspcInitSp(aram) : (spc?.sp ?? 0xef)) & 0xff;
   const x = (spc?.x ?? 0) & 0xff;
@@ -485,15 +555,13 @@ export function spcResumeTrampoline(state: RhState1, dspPoke?: SpcDspPoke | null
   const f1 = aram && aram.length > 0xf1 ? aram[0xf1]! : 0;
   const dp0 = aram && aram.length > 0 ? aram[0]! : 0;
   const dp1 = aram && aram.length > 1 ? aram[1]! : 0;
-  const song = levelMusicId(getSectionDecoded(state, 'wram') ?? new Uint8Array(0));
+  // Akogare N-SPC `$0BC0` reload. Other engines (Invictus) keep captured $02/$06.
+  const song = wait >= 0 ? levelMusicId(getSectionDecoded(state, 'wram') ?? new Uint8Array(0)) : 0;
   const f8 = aram && aram.length > 0xf8 ? aram[0xf8]! : 0;
   const f9 = aram && aram.length > 0xf9 ? aram[0xf9]! : 0;
   const fa = aram && aram.length > 0xfa ? aram[0xfa]! : 0;
   const fb = aram && aram.length > 0xfb ? aram[0xfb]! : 0;
   const fc = aram && aram.length > 0xfc ? aram[0xfc]! : 0;
-  const poke = dspPoke === undefined
-    ? dspPokeForState(state, pad(aram ?? new Uint8Array(0), 0x10000))
-    : dspPoke;
   const out: number[] = [
     0xe8, psw,             // MOV A,#psw
     0x2d,                  // PUSH A
@@ -549,10 +617,17 @@ export function spcResumeTrampoline(state: RhState1, dspPoke?: SpcDspPoke | null
     0xe8, a,               // MOV A,#a
     0x5f, pc & 0xff, (pc >> 8) & 0xff, // JMP !pc
   );
-  return { addr, bytes: Uint8Array.from(out), pc };
+  return { bytes: Uint8Array.from(out), pc };
 }
 
-function dspPokeForState(state: RhState1, aram: Uint8Array): SpcDspPoke | null {
+export function spcResumeTrampoline(state: RhState1, dspPoke?: SpcDspPoke | null): { addr: number; bytes: Uint8Array; pc: number } {
+  const slots = chooseSpcResumeSlots(state);
+  const poke = dspPoke === undefined ? slots.poke : dspPoke;
+  const assembled = assembleSpcResumeBytes(state, poke);
+  return { addr: slots.trampAddr, bytes: assembled.bytes, pc: assembled.pc };
+}
+
+function dspPokeForState(state: RhState1, aram: Uint8Array, extraForbidden: [number, number][] = []): SpcDspPoke | null {
   const dsp = getSectionDecoded(state, 'dsp');
   if (!dsp || dsp.length < 0x80) return null;
   const esa = (dsp[0x6d] ?? 0) << 8;
@@ -560,10 +635,10 @@ function dspPokeForState(state: RhState1, aram: Uint8Array): SpcDspPoke | null {
   const echoLen = edl === 0 ? 0 : edl * 0x800;
   const table = findAramZeroRun(aram, 0x80, [
     [0, 0x100],
-    [SPC_TRAMPOLINE_ADDR, SPC_TRAMPOLINE_ADDR + 0x80],
     [SPC_COPIER_ADDR, 0xffc0],
     [esa, esa + echoLen],
     [0xffc0, 0x10000],
+    ...extraForbidden,
   ]);
   if (table < 0) return null;
   return { table, kon: konRestart(dsp, state.dsp_voices) };
@@ -573,7 +648,7 @@ function dspPokeForState(state: RhState1, aram: Uint8Array): SpcDspPoke | null {
  * IPL plants the copier at $FF80 (dest bit7 set so Start can JMP), then the
  * copier copies $0000–$FF7F (handshake tracks copier X; skip page0 $F0–$FF) and JMP $0386.
  */
-function emitSpcIplUpload(bytes: number[], aramBank: number, copierLen: number): void {
+function emitSpcIplUpload(bytes: number[], aramBank: number, copierLen: number, trampAddr: number): void {
   bytes.push(0xc2, 0x10); // REP #$10
   bytes.push(0x8b); // PHB — both success and skip PLB
   bytes.push(0xa0, 0x20, 0x00); // LDY #$0020 timeout outer
@@ -612,9 +687,12 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, copierLen: number):
   const braEnd = bytes.length;
   bytes.push(0x80, 0x00); // BRA end
   const skip = bytes.length;
-  // No $AA: IPL is still in BIOS. Jump ($2141=0) to the low trampoline so later
-  // game APUIO cannot IPL-jump into RAM. Unuploaded ARAM is typically $FF (STOP).
-  emitIplKick(bytes, SPC_TRAMPOLINE_ADDR, 0xcc, false);
+  // No $AA: IPL is still in BIOS. Jump ($2141=0) to a bit7 dest so Start can
+  // JMP; $0386 works, a relocated low trampoline does not — use $FF80 then.
+  const skipDest = trampAddr === SPC_TRAMPOLINE_ADDR || (trampAddr & 0x8000)
+    ? trampAddr
+    : SPC_COPIER_ADDR;
+  emitIplKick(bytes, skipDest, 0xcc, false);
   bytes.push(0xab); // PLB timeout
   const endIpl = bytes.length;
   bytes[braEnd + 1] = (endIpl - (braEnd + 2)) & 0xff;
@@ -805,8 +883,9 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
   }
 
   const aramBank = (bank + WRAM_BANKS + VRAM_BANKS) & 0xff;
-  const copier = spcHighCopier(spcTrampolineAddr(state));
-  emitSpcIplUpload(bytes, aramBank, copier.length);
+  const trampAddr = spcTrampolineAddr(state);
+  const copier = spcHighCopier(trampAddr);
+  emitSpcIplUpload(bytes, aramBank, copier.length, trampAddr);
 
   emitPpuPokes(bytes, state);
   emitCpuMmio(bytes, state, stubBank);
@@ -814,7 +893,10 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
   emitWait2140Ack(bytes, 0xa5);
   emitWait2141Ack(bytes, 0x5a);
   const regs = state.spc?.cpu_regs ?? [0, 0, 0, 0];
-  const song = levelMusicId(getSectionDecoded(state, 'wram') ?? new Uint8Array(0));
+  const aram = getSectionDecoded(state, 'spc_aram');
+  const song = findNspcTimerWait(aram) >= 0
+    ? levelMusicId(getSectionDecoded(state, 'wram') ?? new Uint8Array(0))
+    : 0;
   for (let i = 0; i < 4; i += 1) {
     ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);
   }
@@ -910,7 +992,8 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   payload.set(wramOut, 0);
   payload.set(pad(getSectionDecoded(work, 'vram'), 0x10000), WRAM_BANKS * LOROM_BANK);
   const aramPayload = pad(getSectionDecoded(work, 'spc_aram'), 0x10000);
-  const dspPoke = dspPokeForState(work, aramPayload);
+  const slots = chooseSpcResumeSlots(work);
+  const dspPoke = slots.poke;
   const spcTramp = spcResumeTrampoline(work, dspPoke);
   const copier = spcHighCopier(spcTramp.addr);
   if (SPC_COPIER_ADDR + copier.length <= aramPayload.length) {
