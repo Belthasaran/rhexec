@@ -8,9 +8,15 @@ local last_10 = 0
 local last_pc = 0
 local last_spc = 0
 local last_0100 = 0
+local last_1dfb = 0
 local last_4200 = 0
 local last_2140 = 0
 local last_2141 = 0
+local last_2142 = 0
+local last_1dff = 0
+local last_aram02 = 0
+local last_aram06 = 0
+local last_ch31 = 0
 local last_spc_y = 0
 local last_spc_a = 0
 local last_spc_x = 0
@@ -98,8 +104,8 @@ local function debug_log(hid, msg)
   local f = io.open(DEBUG_LOG_PATH, "a")
   if not f then return end
   f:write(string.format(
-    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcX":%d,"spcA":%d,"spcSp":%d,"cpuA":%d,"cpuP":%d,"destLo":%d,"destHi":%d,"wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d,"aramPc":%d,"aram11b0":%d,"aram0549":%d,"f1":%d,"fa":%d,"fd":%d,"stackRet":%d,"tramp0":%d},"timestamp":%d,"runId":"post-fix-041"}\n',
-    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_x), as_num(last_spc_a), as_num(last_spc_sp), as_num(last_cpu_a), as_num(last_cpu_p), as_num(last_dest_lo), as_num(last_dest_hi), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), as_num(last_aram_pc), as_num(last_aram_11b0), as_num(last_aram_0549), as_num(last_f1), as_num(last_fa), as_num(last_fd), as_num(last_stack_ret), as_num(last_tramp0), (os.time() * 1000)
+    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcX":%d,"spcA":%d,"spcSp":%d,"cpuA":%d,"cpuP":%d,"destLo":%d,"destHi":%d,"wram10":%d,"wram0100":%d,"wram1dfb":%d,"wram1dff":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d,"apuio2":%d,"aram02":%d,"aram06":%d,"ch31":%d,"aramPc":%d,"aram11b0":%d,"aram0549":%d,"f1":%d,"fa":%d,"fd":%d,"stackRet":%d,"tramp0":%d},"timestamp":%d,"runId":"post-fix-043"}\n',
+    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_x), as_num(last_spc_a), as_num(last_spc_sp), as_num(last_cpu_a), as_num(last_cpu_p), as_num(last_dest_lo), as_num(last_dest_hi), as_num(last_10), as_num(last_0100), as_num(last_1dfb), as_num(last_1dff), as_num(last_4200), as_num(last_2140), as_num(last_2141), as_num(last_2142), as_num(last_aram02), as_num(last_aram06), as_num(last_ch31), as_num(last_aram_pc), as_num(last_aram_11b0), as_num(last_aram_0549), as_num(last_f1), as_num(last_fa), as_num(last_fd), as_num(last_stack_ret), as_num(last_tramp0), (os.time() * 1000)
   ))
   f:close()
 end
@@ -139,6 +145,9 @@ local function peek_spc(spcRam)
   last_fa = as_num(read_byte(0xfa, spcRam))
   last_fd = as_num(read_byte(0xfd, spcRam))
   last_tramp0 = as_num(read_byte(0x0386, spcRam))
+  last_aram02 = as_num(read_byte(0x0002, spcRam))
+  last_aram06 = as_num(read_byte(0x0006, spcRam))
+  last_ch31 = as_num(read_byte(0x0031, spcRam)) + 256 * as_num(read_byte(0x0032, spcRam))
   local sp = as_num(last_spc_sp) % 256
   last_stack_ret = as_num(read_byte(0x100 + ((sp + 1) % 256), spcRam)) + 256 * as_num(read_byte(0x100 + ((sp + 2) % 256), spcRam))
 end
@@ -160,6 +169,10 @@ local function on_frame()
   if v ~= nil then last_10 = as_num(v) end
   local gm = read_byte(0x0100, mt.wram)
   if gm ~= nil then last_0100 = as_num(gm) end
+  local mus = read_byte(0x1dfb, mt.wram)
+  if mus ~= nil then last_1dfb = as_num(mus) end
+  local dff = read_byte(0x1dff, mt.wram)
+  if dff ~= nil then last_1dff = as_num(dff) end
   local nmi = read_byte(0x4200, mt.cpu)
   if nmi ~= nil then last_4200 = as_num(nmi) end
   snapshot_state()
@@ -172,6 +185,8 @@ local function on_frame()
   if a0 ~= nil then last_2140 = as_num(a0) end
   local a1 = read_byte(0x2141, mt.cpu)
   if a1 ~= nil then last_2141 = as_num(a1) end
+  local a2 = read_byte(0x2142, mt.cpu)
+  if a2 ~= nil then last_2142 = as_num(a2) end
   if frame == 1 or frame == 60 or frame == 180 then
     peek_spc(spcRam)
     debug_log("B", "frame-snapshot")

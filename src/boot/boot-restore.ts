@@ -427,6 +427,7 @@ export function spcResumeTrampoline(state: RhState1, dspPoke?: SpcDspPoke | null
   const f1 = aram && aram.length > 0xf1 ? aram[0xf1]! : 0;
   const dp0 = aram && aram.length > 0 ? aram[0]! : 0;
   const dp1 = aram && aram.length > 1 ? aram[1]! : 0;
+  const song = levelMusicId(getSectionDecoded(state, 'wram') ?? new Uint8Array(0));
   const f8 = aram && aram.length > 0xf8 ? aram[0xf8]! : 0;
   const f9 = aram && aram.length > 0xf9 ? aram[0xf9]! : 0;
   const fa = aram && aram.length > 0xfa ? aram[0xfa]! : 0;
@@ -443,13 +444,19 @@ export function spcResumeTrampoline(state: RhState1, dspPoke?: SpcDspPoke | null
     0xbd,                  // MOV SP,X
     0x8f, dp0, 0x00,       // MOV $00,#  (undo IPL dest word)
     0x8f, dp1, 0x01,       // MOV $01,#
+  ];
+  if (song !== 0) {
+    // $0BC0 JMPs $B40 when $02!=0; $06=0 skips dead KON ticks until that load.
+    out.push(0x8f, 0x00, 0x06, 0x8f, song, 0x02);
+  }
+  out.push(
     0x8f, f8, 0xf8,        // ram regs + timer targets before CONTROL enable
     0x8f, f9, 0xf9,
     0x8f, fa, 0xfa,
     0x8f, fb, 0xfb,
     0x8f, fc, 0xfc,
     0x8f, f1, 0xf1,        // MOV $F1,#f1  (unmap IPL if bit7=0; timer enable last)
-  ];
+  );
   if (poke) {
     out.push(0xcd, 0x00); // MOV X,#0
     const loop = out.length;
@@ -743,9 +750,12 @@ export function assembleBootStub(opts: { payloadBank: number; stubBank: number; 
   emitWait2140Ack(bytes, 0xa5);
   emitWait2141Ack(bytes, 0x5a);
   const regs = state.spc?.cpu_regs ?? [0, 0, 0, 0];
+  const song = levelMusicId(getSectionDecoded(state, 'wram') ?? new Uint8Array(0));
   for (let i = 0; i < 4; i += 1) {
     ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);
   }
+  // Hold the song on $2142. AMK NMI only writes 0 when $2142==$1DFF and $1DFB==0.
+  if (song !== 0) ldaSta(bytes, song, 0x2142);
 
   bytes.push(
     0xc2, 0x30, // REP #$30
@@ -779,6 +789,33 @@ export interface BootRestoreResult {
   oamOffset: number;
 }
 
+/** Pending `$1DFB`, else in-level `$0DDA`. */
+export function levelMusicId(wram: Uint8Array): number {
+  if (wram.length <= 0x1dfb) return 0;
+  const pending = wram[0x1dfb] ?? 0;
+  if (pending !== 0) return pending & 0xff;
+  if (wram.length <= 0x0dda) return 0;
+  return (wram[0x0dda] ?? 0) & 0xff;
+}
+
+/**
+ * AMK `$00817C`: `$1DFB!=0` does `STA $2142` / `STA $1DFF` / `STZ $1DFB`.
+ * The next NMI then writes 0 to `$2142` while it still equals `$1DFF`, before
+ * N-SPC's port-2 poll (`$05A5` X=2, only on `$49` overflow). Leave both 0 and
+ * hold the id on `$2142`; trampoline arms `$02`/`$06` so `$0BC0` reloads.
+ */
+export function holdLevelMusicPort(wram: Uint8Array): number {
+  const song = levelMusicId(wram);
+  if (wram.length > 0x1dfb) wram[0x1dfb] = 0;
+  if (wram.length > 0x1dff) wram[0x1dff] = 0;
+  return song;
+}
+
+/** @deprecated 0.2.42 one-shot `$1DFB` was cleared next vblank; use holdLevelMusicPort. */
+export function requeueLevelMusic(wram: Uint8Array): boolean {
+  return holdLevelMusicPort(wram) !== 0;
+}
+
 export function buildBootRestoreRom(original: Uint8Array, state: RhState1): BootRestoreResult {
   const { body, headered } = splitRomHeader(original);
   const header = headered ? original.subarray(0, 512) : null;
@@ -804,7 +841,7 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
       }
       return false;
     };
-    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'A', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7f80: has([0xc0, 0x80, 0x7f]), hasStackHs: has([0xa3, 0x01, 0x8f, 0x40, 0x21, 0x00]), hasIncA: has([0x1a, 0xd0]), hasCopierDestHi: has([0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]), hasLdaFf80: has([0xb9, 0x80, 0xff]), hasEchoAck: has([0xcf, 0x40, 0x21, 0x00, 0xd0]), hasEchoTimed: has([0xcf, 0x40, 0x21, 0x00, 0xf0]), hasWaitA5: has([0xc9, 0xa5, 0xd0]), hasWait5A: has([0xc9, 0x5a, 0xd0]), hasJmp0549: has([0x5f, 0x49, 0x05]) }, timestamp: Date.now(), runId: 'post-fix-041' }) }).catch(() => {});
+    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'H', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7f80: has([0xc0, 0x80, 0x7f]), hasStackHs: has([0xa3, 0x01, 0x8f, 0x40, 0x21, 0x00]), hasIncA: has([0x1a, 0xd0]), hasCopierDestHi: has([0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]), hasLdaFf80: has([0xb9, 0x80, 0xff]), hasEchoAck: has([0xcf, 0x40, 0x21, 0x00, 0xd0]), hasEchoTimed: has([0xcf, 0x40, 0x21, 0x00, 0xf0]), hasWaitA5: has([0xc9, 0xa5, 0xd0]), hasWait5A: has([0xc9, 0x5a, 0xd0]) }, timestamp: Date.now(), runId: 'post-fix-043' }) }).catch(() => {});
   }
   // #endregion
 
@@ -815,7 +852,12 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   stubBankBytes.set(packDmaRegs(work), STUB_DMA_ADDR - 0x8000);
 
   const payload = new Uint8Array(PAYLOAD_BANKS * LOROM_BANK);
-  payload.set(pad(wram, 0x20000), 0);
+  const wramOut = pad(wram, 0x20000);
+  const song = holdLevelMusicPort(wramOut);
+  // #region agent log
+  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'H', location: 'boot-restore.ts:holdLevelMusicPort', message: 'wram music', data: { dda: wramOut[0x0dda], dfb: wramOut[0x1dfb], dff: wramOut[0x1dff], song }, timestamp: Date.now(), runId: 'post-fix-043' }) }).catch(() => {});
+  // #endregion
+  payload.set(wramOut, 0);
   payload.set(pad(getSectionDecoded(work, 'vram'), 0x10000), WRAM_BANKS * LOROM_BANK);
   const aramPayload = pad(getSectionDecoded(work, 'spc_aram'), 0x10000);
   const dspPoke = dspPokeForState(work, aramPayload);
@@ -839,7 +881,7 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
     aramPayload.set(spcTramp.bytes, spcTramp.addr);
   }
   // #region agent log
-  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'B', location: 'boot-restore.ts:aramOverlay', message: 'aram overlay', data: { copierAddr: SPC_COPIER_ADDR, copierLen: copier.length, jumpKick: (copier.length + 2) & 0xff, trampAddr: spcTramp.addr, trampLen: spcTramp.bytes.length, trampSpin: spcTramp.bytes.includes(0x78) && spcTramp.bytes.includes(0xf4), tramp5A: [...spcTramp.bytes].some((_, i, a) => a[i] === 0x8f && a[i + 1] === 0x5a && a[i + 2] === 0xf5), hasSkipF0: copier.includes(0xf0) && [...copier].includes(0x68), copierHead: [aramPayload[SPC_COPIER_ADDR], aramPayload[SPC_COPIER_ADDR + 1], aramPayload[SPC_COPIER_ADDR + 2]], copierJmp: [aramPayload[SPC_COPIER_ADDR + copier.length - 3], aramPayload[SPC_COPIER_ADDR + copier.length - 2], aramPayload[SPC_COPIER_ADDR + copier.length - 1]], trampJmp: [aramPayload[spcTramp.addr + spcTramp.bytes.length - 3], aramPayload[spcTramp.addr + spcTramp.bytes.length - 2], aramPayload[spcTramp.addr + spcTramp.bytes.length - 1]] }, timestamp: Date.now(), runId: 'post-fix-041' }) }).catch(() => {});
+    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'I', location: 'boot-restore.ts:aramOverlay', message: 'aram overlay', data: { copierAddr: SPC_COPIER_ADDR, copierLen: copier.length, jumpKick: (copier.length + 2) & 0xff, trampAddr: spcTramp.addr, trampLen: spcTramp.bytes.length, trampSpin: spcTramp.bytes.includes(0x78) && spcTramp.bytes.includes(0xf4), tramp5A: [...spcTramp.bytes].some((_, i, a) => a[i] === 0x8f && a[i + 1] === 0x5a && a[i + 2] === 0xf5), hasSongArm: song !== 0 && [...spcTramp.bytes].some((_, i, a) => a[i] === 0x8f && a[i + 1] === 0 && a[i + 2] === 6) && [...spcTramp.bytes].some((_, i, a) => a[i] === 0x8f && a[i + 1] === song && a[i + 2] === 2), aram02: aramPayload[2], aram06: aramPayload[6], song, hasSkipF0: copier.includes(0xf0) && [...copier].includes(0x68), copierHead: [aramPayload[SPC_COPIER_ADDR], aramPayload[SPC_COPIER_ADDR + 1], aramPayload[SPC_COPIER_ADDR + 2]], copierJmp: [aramPayload[SPC_COPIER_ADDR + copier.length - 3], aramPayload[SPC_COPIER_ADDR + copier.length - 2], aramPayload[SPC_COPIER_ADDR + copier.length - 1]], trampJmp: [aramPayload[spcTramp.addr + spcTramp.bytes.length - 3], aramPayload[spcTramp.addr + spcTramp.bytes.length - 2], aramPayload[spcTramp.addr + spcTramp.bytes.length - 1]] }, timestamp: Date.now(), runId: 'post-fix-043' }) }).catch(() => {});
   // #endregion
   payload.set(aramPayload, (WRAM_BANKS + VRAM_BANKS) * LOROM_BANK);
 

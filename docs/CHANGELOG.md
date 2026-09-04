@@ -1,5 +1,7 @@
 # Changelog
 
+- **0.2.43:** `$1DFB←$0DDA` reached NMI (cleared by frame 212) but AMK `$00817C` then wrote 0 to `$2142` on the next vblank (`$2142==$1DFF`) before N-SPC polled port 2. Hold the song on `$2142` with `$1DFB`/`$1DFF` left 0; trampoline `MOV $06,#0` / `MOV $02,#id` so `$0BC0` reloads from the ARAM table. Rebuild the SFC.
+- **0.2.42:** Engine stayed at `$0549` (SFX worked) but `$1DFB` was 0 so NMI never re-sent the song; `$0DDA=1` is the in-level ID. Boot WRAM copies `$0DDA` into `$1DFB` when pending is 0. Rebuild the SFC.
 - **0.2.41:** Picture/NMI worked but SPC never stayed in the engine: `$11B0`/`$0549` bytes were intact, yet first NMI had trampoline A/X/Y with PC in random high/seq RAM (`$FF48` / `$C7F5` / `$6812`). Mid-CALL `$11B0` `RET`s off a stale stack. Trampoline JMPs the timer wait `$0549` with empty SP `$CF`; `$FA` before `$F1`. Rebuild the SFC.
 - **0.2.40:** NMI came up (frame 212) but SPC was in high sample RAM (`$9224` / `$B56D`) then `$1A81` (a table, not N-SPC). The `$A5` wait ran right after the copier, so a leftover `$2140=$A5` let `$4200` fire while the trampoline was still in DSP, or N-SPC started during PPU pokes. Trampoline now signals `$A5`/`$5A` and spins until the CPU overwrites `$F4`; the CPU waits after PPU restore, then writes `cpu_regs` / `$4200`. Rebuild the SFC.
 - **0.2.39:** Copier finished and the trampoline ran (NMI frame 212, SPC `$039F` mid-DSP copy) but game NMI beat the JMP `$11B0`, so the APU ended in data at `$0122`. CPU waits for trampoline `$F4=$A5`; `$F8–$FC` restored. Rebuild the SFC.

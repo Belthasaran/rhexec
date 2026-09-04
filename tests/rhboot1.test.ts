@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildBootRestoreRom, inidispByte, iplNextCommandKick, loromOffset, nmiTimenByte, obselByte, spcHighCopier, spcResumeTrampoline, SPC_COPIER_ADDR } from '../src/boot/boot-restore.ts';
+import { buildBootRestoreRom, holdLevelMusicPort, inidispByte, iplNextCommandKick, levelMusicId, loromOffset, nmiTimenByte, obselByte, requeueLevelMusic, spcHighCopier, spcResumeTrampoline, SPC_COPIER_ADDR } from '../src/boot/boot-restore.ts';
 import { reconstructFillram } from '../src/players/mesen-state-map.ts';
 import { emptyCpu, makeFixtureRom, makeState } from './helpers.ts';
 import type { InternalRegs, PpuLayer, PpuState } from '../src/rhstate1/types.ts';
@@ -314,6 +314,51 @@ test('obselByte packs Mesen OamMode/base/offset into $2101', () => {
   assert.equal(obselByte({ oam_mode: 0, oam_base: 24576, oam_address_offset: 4096 }), 0x03);
   assert.equal(obselByte({ oam_mode: 3, oam_base: 0x4000, oam_address_offset: 0x3000 }), 0x72);
   assert.equal(obselByte({ oam_mode: 0, oam_base: 0 }), 0x00);
+});
+
+test('levelMusicId prefers pending $1DFB then $0DDA', () => {
+  const w = new Uint8Array(0x20000);
+  w[0x0dda] = 5;
+  assert.equal(levelMusicId(w), 5);
+  w[0x1dfb] = 3;
+  assert.equal(levelMusicId(w), 3);
+});
+
+test('holdLevelMusicPort zeros $1DFB and $1DFF so AMK NMI cannot clobber $2142', () => {
+  const w = new Uint8Array(0x20000);
+  w[0x0dda] = 5;
+  w[0x1dfb] = 3;
+  w[0x1dff] = 3;
+  assert.equal(holdLevelMusicPort(w), 3);
+  assert.equal(w[0x1dfb], 0);
+  assert.equal(w[0x1dff], 0);
+  assert.equal(w[0x0dda], 5);
+});
+
+test('requeueLevelMusic now holds the port instead of poking $1DFB', () => {
+  const w = new Uint8Array(0x20000);
+  w[0x0dda] = 5;
+  assert.equal(requeueLevelMusic(w), true);
+  assert.equal(w[0x1dfb], 0);
+});
+
+test('boot-restore holds song on $2142 and arms SPC $02/$06 without $1DFB', () => {
+  const st = akogareLikeState();
+  const wram = st.sections.find((s) => s.id === 'wram')!.data;
+  wram[0x0dda] = 7;
+  wram[0x1dfb] = 0;
+  const { rom: out, payloadOffset, stubOffset, aramOffset } = buildBootRestoreRom(makeFixtureRom(), st);
+  const body = bodyOf(out);
+  assert.equal(body[payloadOffset + 0x1dfb], 0);
+  assert.equal(body[payloadOffset + 0x1dff], 0);
+  assert.equal(body[payloadOffset + 0x0dda], 7);
+  const stub = body.subarray(stubOffset, stubOffset + 0x600);
+  assert.ok(findSeq(stub, [0xa9, 0x07, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'STA $2142 with song id after handshake');
+  const tramp = spcResumeTrampoline(st);
+  assert.ok(findSeq(tramp.bytes, [0x8f, 0x00, 0x06]) >= 0, 'trampoline MOV $06,#0');
+  assert.ok(findSeq(tramp.bytes, [0x8f, 0x07, 0x02]) >= 0, 'trampoline MOV $02,#song');
+  assert.ok(tramp.bytes.length <= 102, 'trampoline still fits $0386 zero run');
+  assert.ok(findSeq(body.subarray(aramOffset + 0x0386), [0x8f, 0x07, 0x02]) >= 0, 'payload trampoline arms $02');
 });
 
 test('reconstructFillram writes packed OBSEL to $2101', () => {
