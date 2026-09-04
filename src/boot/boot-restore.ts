@@ -164,12 +164,22 @@ function emitWait2140(bytes: number[], value: number, jumpBrls?: number[]): void
   patchRel8(bytes, bne + 1, loop);
 }
 
-/** A already holds the expected $2140 echo. */
-function emitWaitEchoAck(bytes: number[]): void {
+/** A already holds the expected $2140 echo. Timeout BRLs to the trampoline jump. */
+function emitWaitEcho(bytes: number[], jumpBrls?: number[]): void {
+  bytes.push(0xa2, 0x00, 0x00); // LDX #0
   const loop = bytes.length;
   bytes.push(0xcf, 0x40, 0x21, 0x00); // CMP $002140
+  const beq = bytes.length;
+  bytes.push(0xf0, 0x00); // BEQ done
+  bytes.push(0xca); // DEX
   const bne = bytes.length;
-  bytes.push(0xd0, 0x00);
+  bytes.push(0xd0, 0x00); // BNE loop
+  if (jumpBrls) {
+    jumpBrls.push(bytes.length + 1);
+    bytes.push(0x82, 0x00, 0x00);
+  }
+  const done = bytes.length;
+  patchRel8(bytes, beq + 1, done);
   patchRel8(bytes, bne + 1, loop);
 }
 
@@ -187,7 +197,7 @@ function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean,
  * and the dest-high `BPL` fails. Dest ≥ $8000 then holds only 256 bytes per
  * command — a second 32KiB stream waits forever (CPU CMP $2140, SPC in RAM).
  */
-function emitIplStream(bytes: number[], count: number): void {
+function emitIplStream(bytes: number[], count: number, jumpBrls?: number[]): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0
   const byteLoop = bytes.length;
   bytes.push(
@@ -196,7 +206,7 @@ function emitIplStream(bytes: number[], count: number): void {
     0x98,                   // TYA
     0x8f, 0x40, 0x21, 0x00, // STA $002140
   );
-  emitWaitEchoAck(bytes);
+  emitWaitEcho(bytes, jumpBrls);
   bytes.push(
     0xc8,                   // INY
     0xc0, u8(count), u8(count >> 8),
@@ -207,28 +217,31 @@ function emitIplStream(bytes: number[], count: number): void {
 }
 
 /** 256-byte IPL page. Index is Y low; exits when Y low wraps. Y is 16-bit. */
-function emitIplIndexPage(bytes: number[]): void {
+function emitIplIndexPage(bytes: number[], jumpBrls?: number[]): void {
   const byteLoop = bytes.length;
   bytes.push(
     0xb9, 0x00, 0x80,       // LDA $8000,Y
     0x8f, 0x41, 0x21, 0x00, // STA $002141
     0x98,                   // TYA
     0x8f, 0x40, 0x21, 0x00, // STA $002140
+    0xda,                   // PHX — timed wait clobbers X (page index)
   );
-  emitWaitEchoAck(bytes);
+  emitWaitEcho(bytes, jumpBrls);
+  bytes.push(0xfa); // PLX
   bytes.push(0xc8, 0x98); // INY / TYA (Y low)
   const bne = bytes.length;
   bytes.push(0xd0, 0x00);
   patchRel8(bytes, bne + 1, byteLoop);
+  ldaSta(bytes, 0x01, 0x2141); // leftover data=0 must not IPL-jump dest
 }
 
 /**
  * High ARAM: first 256 bytes continue dest $8000, then one new command per
  * 256-byte page ($8100–$FE00), last page $FF00–$FFBF, jump kick $C1.
  */
-function emitIplHighPaged(bytes: number[]): void {
+function emitIplHighPaged(bytes: number[], jumpBrls?: number[]): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0  dest $8000 page
-  emitIplIndexPage(bytes);
+  emitIplIndexPage(bytes, jumpBrls);
   bytes.push(0xa2, 0x01, 0x00); // LDX #$0001  dest $8100
   const pageLoop = bytes.length;
   ldaSta(bytes, 0x00, 0x2142);
@@ -239,7 +252,9 @@ function emitIplHighPaged(bytes: number[]): void {
   );
   ldaSta(bytes, 0x01, 0x2141);
   ldaSta(bytes, 0x80, 0x2140);
-  emitWait2140Ack(bytes, 0x80);
+  bytes.push(0xda); // PHX
+  emitWait2140(bytes, 0x80, jumpBrls);
+  bytes.push(0xfa); // PLX
   bytes.push(
     0xc2, 0x20,             // REP #$20
     0x8a,                   // TXA
@@ -247,7 +262,7 @@ function emitIplHighPaged(bytes: number[]): void {
     0xa8,                   // TAY
     0xe2, 0x20,             // SEP #$20
   );
-  emitIplIndexPage(bytes);
+  emitIplIndexPage(bytes, jumpBrls);
   bytes.push(
     0xe8,                   // INX
     0xe0, 0x7f, 0x00,       // CPX #$007F
@@ -255,7 +270,7 @@ function emitIplHighPaged(bytes: number[]): void {
   const bnePage = bytes.length;
   bytes.push(0xd0, 0x00);
   patchRel8(bytes, bnePage + 1, pageLoop);
-  emitIplKick(bytes, 0xff00, 0x80, true, undefined, true);
+  emitIplKick(bytes, 0xff00, 0x80, true, jumpBrls);
   bytes.push(0xa0, 0x00, 0x7f); // LDY #$7F00
   const lastLoop = bytes.length;
   bytes.push(
@@ -264,7 +279,7 @@ function emitIplHighPaged(bytes: number[]): void {
     0x98,
     0x8f, 0x40, 0x21, 0x00,
   );
-  emitWaitEchoAck(bytes);
+  emitWaitEcho(bytes, jumpBrls);
   bytes.push(
     0xc8,
     0xc0, 0xc0, 0x7f,       // CPY #$7FC0
@@ -425,11 +440,11 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
 
   bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
   emitIplKick(bytes, 0x0000, 0xcc, true, jumpBrls);
-  emitIplStream(bytes, 0x8000);
+  emitIplStream(bytes, 0x8000, jumpBrls);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  emitIplHighPaged(bytes);
+  emitIplHighPaged(bytes, jumpBrls);
   const doJump = bytes.length;
-  emitIplKick(bytes, spcPc & 0xffff, IPL_JUMP_KICK, false, undefined, true);
+  emitIplKick(bytes, spcPc & 0xffff, IPL_JUMP_KICK, false);
   const regs = cpuRegs ?? [0, 0, 0, 0];
   for (let i = 0; i < 4; i += 1) {
     ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);
@@ -685,6 +700,18 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   if (stub.length > STUB_CODE_MAX) {
     throw new Error(`boot stub too large (${stub.length} > ${STUB_CODE_MAX})`);
   }
+  // #region agent log
+  {
+    const has = (n: number[]) => {
+      outer: for (let i = 0; i + n.length <= stub.length; i += 1) {
+        for (let j = 0; j < n.length; j += 1) if (stub[i + j] !== n[j]) continue outer;
+        return true;
+      }
+      return false;
+    };
+    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'D', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasLdx1: has([0xa2, 0x01, 0x00]), hasCpx7f: has([0xe0, 0x7f, 0x00]), hasJumpC1: has([0xa9, 0xc1, 0x8f, 0x40, 0x21, 0x00]), hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7fc0: has([0xc0, 0xc0, 0x7f]), hasKick80: has([0xa9, 0x80, 0x8f, 0x40, 0x21, 0x00]) }, timestamp: Date.now(), runId: 'pre-fix' }) }).catch(() => {});
+  }
+  // #endregion
 
   const stubBankBytes = new Uint8Array(LOROM_BANK);
   stubBankBytes.set(stub);
