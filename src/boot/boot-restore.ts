@@ -219,8 +219,7 @@ function emitIplStream(bytes: number[], count: number, jumpBrls?: number[], star
 
 /**
  * Copier-fed bulk: handshake is TYA except wrap-to-0 becomes 1.
- * After 32KiB the copier is waiting for 1 (skip-0 at dest $8000), so the
- * high stream must not send 0 (`allowZero` false).
+ * High-only copier starts at dest $8000 / X=0, so the first 0 is allowed.
  */
 function emitSkip0Stream(bytes: number[], count: number, src = 0x8000, allowZero = true): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0 payload
@@ -281,11 +280,11 @@ export function iplNextCommandKick(indexAfter: number): number {
 }
 
 export function spcHighCopier(trampAddr: number): Uint8Array {
-  // Handshake in X. Do not MOV to $F0–$FF on page 0 (CONTROL $F1 clears APUIO).
+  // IPL already filled $0000–$7FFF. Copy $8000–$FF7F; handshake in X; skip 0 after wrap.
   const bytes: number[] = [
     0xcd, 0x00,       // MOV X,#$00
     0x8f, 0x00, 0x00, // MOV $00,#$00
-    0x8f, 0x00, 0x01, // MOV $01,#$00
+    0x8f, 0x80, 0x01, // MOV $01,#$80
   ];
   const wait = bytes.length;
   bytes.push(0x3e, 0xf4); // CMP X,$F4
@@ -295,27 +294,10 @@ export function spcHighCopier(trampAddr: number): Uint8Array {
   bytes.push(
     0xe4, 0xf5, // MOV A,$F5
     0xd8, 0xf4, // MOV $F4,X
-    0xfd,       // MOV Y,A  data
-    0xe4, 0x01, // MOV A,$01
-  );
-  const bneStore = bytes.length;
-  bytes.push(0xd0, 0x00); // BNE store
-  bytes.push(
-    0xe4, 0x00, // MOV A,$00
-    0x68, 0xf0, // CMP A,#$F0
-  );
-  const bcsSkip = bytes.length;
-  bytes.push(0xb0, 0x00); // BCS skip (page0 MMIO)
-  const store = bytes.length;
-  patchRel8(bytes, bneStore + 1, store);
-  bytes.push(
-    0xdd,       // MOV A,Y
     0x8d, 0x00, // MOV Y,#$00
     0xd7, 0x00, // MOV [$00]+Y,A
+    0xab, 0x00, // INC $00
   );
-  const skip = bytes.length;
-  patchRel8(bytes, bcsSkip + 1, skip);
-  bytes.push(0xab, 0x00); // INC $00
   const bneInc = bytes.length;
   bytes.push(0xd0, 0x00);
   bytes.push(0xab, 0x01); // INC $01
@@ -454,8 +436,9 @@ function dspPokeForState(state: RhState1, aram: Uint8Array): SpcDspPoke | null {
 }
 
 /**
- * IPL plants the copier at $FF80 (dest bit7 set so Start can JMP), then the
- * copier copies $0000–$FF7F (index handshake, skip page0 $F0–$FF and skip 0 after wrap) and JMP $0386. Jump kick is Y+2.
+ * IPL plants the copier at $FF80, streams the low 32KiB (dest $0000, more=1),
+ * then Start-jumps the copier which copies $8000–$FF7F and JMP $0386.
+ * After 32KiB IPL Y=0 so the jump kick is 2.
  */
 function emitSpcIplUpload(bytes: number[], aramBank: number, copierLen: number, cpuRegs?: number[]): void {
   bytes.push(0xc2, 0x10); // REP #$10
@@ -481,15 +464,17 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, copierLen: number, 
   patchRel8(bytes, bneOuter + 1, outer);
 
   const jumpPlant: number[] = [];
-  const jumpKick = iplNextCommandKick(copierLen);
+  const lowKick = iplNextCommandKick(copierLen);
+  const jumpKick = iplNextCommandKick(0);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
   emitIplKick(bytes, SPC_COPIER_ADDR, 0xcc, true, jumpPlant);
   emitIplStream(bytes, copierLen, jumpPlant, 0, SPC_COPIER_ADDR);
-  emitIplKick(bytes, SPC_COPIER_ADDR, jumpKick, false, undefined, true);
+  emitIplKick(bytes, 0x0000, lowKick, true, jumpPlant);
   bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
-  emitSkip0Stream(bytes, 0x8000);
+  emitIplStream(bytes, 0x8000, jumpPlant);
+  emitIplKick(bytes, SPC_COPIER_ADDR, jumpKick, false, undefined, true);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  emitSkip0Stream(bytes, 0x7f80, 0x8000, false);
+  emitSkip0Stream(bytes, 0x7f80);
   const regs = cpuRegs ?? [0, 0, 0, 0];
   for (let i = 0; i < 4; i += 1) {
     ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);
@@ -754,7 +739,7 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
       }
       return false;
     };
-    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'A', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7f80: has([0xc0, 0x80, 0x7f]), hasCpy0000: has([0xc0, 0x00, 0x00]), hasCopierDestHi: has([0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]), hasLdaFf80: has([0xb9, 0x80, 0xff]), hasEchoAck: has([0xcf, 0x40, 0x21, 0x00, 0xd0]), hasSkip0: has([0xa9, 0x01, 0x8f, 0x40, 0x21, 0x00]), hasEchoTimed: has([0xcf, 0x40, 0x21, 0x00, 0xf0]) }, timestamp: Date.now(), runId: 'post-fix-035' }) }).catch(() => {});
+    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'A', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7f80: has([0xc0, 0x80, 0x7f]), hasCpy0000: has([0xc0, 0x00, 0x00]), hasDest0: has([0xa9, 0x00, 0x8f, 0x42, 0x21, 0x00]), hasJumpKick2: has([0xa9, 0x02, 0x8f, 0x40, 0x21, 0x00]), hasCopierDestHi: has([0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]), hasLdaFf80: has([0xb9, 0x80, 0xff]), hasEchoAck: has([0xcf, 0x40, 0x21, 0x00, 0xd0]), hasSkip0: has([0xa9, 0x01, 0x8f, 0x40, 0x21, 0x00]), hasEchoTimed: has([0xcf, 0x40, 0x21, 0x00, 0xf0]) }, timestamp: Date.now(), runId: 'post-fix-036' }) }).catch(() => {});
   }
   // #endregion
 
@@ -789,7 +774,7 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
     aramPayload.set(spcTramp.bytes, spcTramp.addr);
   }
   // #region agent log
-  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'E', location: 'boot-restore.ts:aramOverlay', message: 'aram overlay', data: { copierAddr: SPC_COPIER_ADDR, copierLen: copier.length, jumpKick: (copier.length + 2) & 0xff, trampAddr: spcTramp.addr, trampLen: spcTramp.bytes.length, hasSkipF0: copier.includes(0xf0) && [...copier].includes(0x68), copierHead: [aramPayload[SPC_COPIER_ADDR], aramPayload[SPC_COPIER_ADDR + 1], aramPayload[SPC_COPIER_ADDR + 2]], copierJmp: [aramPayload[SPC_COPIER_ADDR + copier.length - 3], aramPayload[SPC_COPIER_ADDR + copier.length - 2], aramPayload[SPC_COPIER_ADDR + copier.length - 1]], trampJmp: [aramPayload[spcTramp.addr + spcTramp.bytes.length - 3], aramPayload[spcTramp.addr + spcTramp.bytes.length - 2], aramPayload[spcTramp.addr + spcTramp.bytes.length - 1]] }, timestamp: Date.now(), runId: 'post-fix-035' }) }).catch(() => {});
+  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'E', location: 'boot-restore.ts:aramOverlay', message: 'aram overlay', data: { copierAddr: SPC_COPIER_ADDR, copierLen: copier.length, jumpKick: 2, trampAddr: spcTramp.addr, trampLen: spcTramp.bytes.length, copierStarts8000: copier[5] === 0x80 && copier[6] === 0x01, copierHead: [aramPayload[SPC_COPIER_ADDR], aramPayload[SPC_COPIER_ADDR + 1], aramPayload[SPC_COPIER_ADDR + 2]], copierJmp: [aramPayload[SPC_COPIER_ADDR + copier.length - 3], aramPayload[SPC_COPIER_ADDR + copier.length - 2], aramPayload[SPC_COPIER_ADDR + copier.length - 1]], trampJmp: [aramPayload[spcTramp.addr + spcTramp.bytes.length - 3], aramPayload[spcTramp.addr + spcTramp.bytes.length - 2], aramPayload[spcTramp.addr + spcTramp.bytes.length - 1]] }, timestamp: Date.now(), runId: 'post-fix-036' }) }).catch(() => {});
   // #endregion
   payload.set(aramPayload, (WRAM_BANKS + VRAM_BANKS) * LOROM_BANK);
 

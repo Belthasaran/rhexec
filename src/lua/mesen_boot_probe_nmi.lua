@@ -15,6 +15,8 @@ local last_spc_a = 0
 local last_spc_x = 0
 local last_cpu_a = 0
 local last_cpu_p = 0
+local last_dest_lo = 0
+local last_dest_hi = 0
 local result_path = RESULT_DIR .. "/nmi_probe.json"
 local done_path = RESULT_DIR .. "/done"
 local failed_path = RESULT_DIR .. "/failed"
@@ -24,6 +26,7 @@ local function memtypes()
   return {
     wram = mt.snesWorkRam or mt.workRam or mt.snesMemory or mt.cpuMemory,
     cpu = mt.snesCpuMemory or mt.cpuMemory or mt.snesMemory or mt.snesDebug,
+    spcRam = mt.snesSpcRam or mt.spcRam or mt.spcMemory,
   }
 end
 
@@ -73,8 +76,8 @@ local function debug_log(hid, msg)
   local f = io.open(DEBUG_LOG_PATH, "a")
   if not f then return end
   f:write(string.format(
-    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcX":%d,"spcA":%d,"cpuA":%d,"cpuP":%d,"wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d},"timestamp":%d,"runId":"post-fix-035"}\n',
-    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_x), as_num(last_spc_a), as_num(last_cpu_a), as_num(last_cpu_p), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), (os.time() * 1000)
+    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcX":%d,"spcA":%d,"cpuA":%d,"cpuP":%d,"destLo":%d,"destHi":%d,"wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d},"timestamp":%d,"runId":"post-fix-036"}\n',
+    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_x), as_num(last_spc_a), as_num(last_cpu_a), as_num(last_cpu_p), as_num(last_dest_lo), as_num(last_dest_hi), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), (os.time() * 1000)
   ))
   f:close()
 end
@@ -125,11 +128,16 @@ local function on_frame()
   local nmi = read_byte(0x4200, mt.cpu)
   if nmi ~= nil then last_4200 = as_num(nmi) end
   snapshot_state()
+  local spcRam = mt.spcRam
+  local d0 = read_byte(0x0000, spcRam)
+  if d0 ~= nil then last_dest_lo = as_num(d0) end
+  local d1 = read_byte(0x0001, spcRam)
+  if d1 ~= nil then last_dest_hi = as_num(d1) end
   local a0 = read_byte(0x2140, mt.cpu)
   if a0 ~= nil then last_2140 = as_num(a0) end
   local a1 = read_byte(0x2141, mt.cpu)
   if a1 ~= nil then last_2141 = as_num(a1) end
-  if frame == 1 or frame == 60 then
+  if frame == 1 or frame == 60 or frame == 180 or frame == 300 then
     debug_log("B", "frame-snapshot")
   end
   if last_10 ~= 0 then

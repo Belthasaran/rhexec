@@ -1,5 +1,7 @@
 # Changelog
 
+- **0.2.36:** Copier was still at `$FF80` at frame 180 (`spcX` climbing ~2 bytes/frame) so `$4200` never ran in the probe; picture with a silent APU is the copier still running. IPL streams the low 32KiB (fast path) then the copier only copies `$8000–$FF7F`. Rebuild the SFC.
+
 - **0.2.35:** After the low 32KiB the copier waits for handshake 1 (skip-0 at dest `$8000`) but the high stream restarted at 0 (`cpuA=0`, `spcX=1`, CPU `$40:82DA`). High stream never sends 0. Rebuild the SFC.
 - **0.2.34:** Copier reached dest `$F1` (`spcY=$F1`, CPU `A=$F2`) then hung in `$FF8A`. That address is SPC CONTROL; captured `$F1=$31` clears APUIO. Skip stores to page0 `$F0–$FF`. Rebuild the SFC.
 - **0.2.33:** `$80`/`$81` toggle agreed on both sides then hung on the second byte (`cpuA=spcY=$81`). 0.2.29 already copied incrementing indices through `$FF`. Copier uses that handshake again, dest pointer + skip 0 after wrap. Rebuild the SFC.

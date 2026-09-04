@@ -51,7 +51,7 @@ async function main(argv: string[]): Promise<number> {
   writeFileSync(out, built.rom);
   process.stdout.write(`wrote ${out} (${built.rom.length} bytes)\n`);
   // #region agent log
-  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'E', location: 'rhboot1-sfc.ts:main', message: 'wrote boot sfc', data: { out, romBytes: built.rom.length, stubOffset: built.stubOffset, pkg: '0.2.35' }, timestamp: Date.now(), runId: 'post-fix-035' }) }).catch(() => {});
+  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'E', location: 'rhboot1-sfc.ts:main', message: 'wrote boot sfc', data: { out, romBytes: built.rom.length, stubOffset: built.stubOffset, pkg: '0.2.36' }, timestamp: Date.now(), runId: 'post-fix-036' }) }).catch(() => {});
   // #endregion
   return 0;
 }
