@@ -8,7 +8,8 @@
 ;   +6..+7  ARAM 64KiB
 ; Stub bank $8600 CGRAM, $8800 OAM, $8A20 DMA regs.
 ;
-; SA-1 is not restored. DSP voice envelopes are not poked (N-SPC may re-init).
+; SA-1 is not restored. DSP regs are copied from a planted ARAM table; KON is
+; write-triggered from captured ENVX (the KON register reads back 0).
 
         sei
         clc
@@ -23,11 +24,10 @@
         sta     $2100
         lda     #$00
         sta     $4200
-        ; DMA WRAM, VRAM, CGRAM, OAM. Timed SPC IPL: 32KiB from $0000, then
-        ; 1-byte IPL commands $8000–$FFBF (dest high bit7 cannot wait for the
-        ; next index). High waits ack with no skip (DIR is at $8000). Jump kick
-        ; $80. After $AA, wait timeout still jumps. No-$AA skip to STOP at $0386.
-        ; Jump to $0386 trampoline (first 32KiB, below echo): restore GPRs, JMP aligned PC.
+        ; DMA WRAM, VRAM, CGRAM, OAM. One SPC IPL transfer dest $0000: 32KiB,
+        ; then the same Trans continues $8000–$FFBF (Y=0 leftover $FF is not a
+        ; new command). Jump kick $C1 (Y=$C0). No-$AA skip to STOP at $0386.
+        ; Trampoline at $0386: DSP regs + KON, restore GPRs, JMP aligned PC.
 ; APUIO/PPU/CPU MMIO are STA/LDA long ($00:xxxx) because DBR may not be 0.
 ; poke PPU (scrolls write-twice), $4300–$437F
 ; restore A,X,Y,DB,P then INIDISP + $4200 and jml !PC

@@ -1,7 +1,7 @@
 import { getSectionDecoded } from '../rhstate1/codec.ts';
 import { obselByte } from '../rhstate1/obsel.ts';
 import { splitRomHeader } from '../rhstate1/rom-info.ts';
-import { emptyDmaChannel, type DmaChannel, type InternalRegs, type PpuState, type RhState1 } from '../rhstate1/types.ts';
+import { emptyDmaChannel, type DmaChannel, type DspVoice, type InternalRegs, type PpuState, type RhState1 } from '../rhstate1/types.ts';
 import { alignSpcFetchPc, prepareSpcResume } from '../players/mesen-state-map.ts';
 
 export { obselByte } from '../rhstate1/obsel.ts';
@@ -132,12 +132,13 @@ function packDmaRegs(state: RhState1): Uint8Array {
   return table;
 }
 
-/** After a dest-high bit7 transfer ends, IPL waits for $2140 with bit7 set. */
-const IPL_NEW_CMD = 0x80;
-/** After each high 1-byte command IPL Y=1, so $80 is a new command. */
-const IPL_JUMP_KICK = IPL_NEW_CMD;
+/**
+ * After $FFBF the IPL index is $C0. Signed `CMP Y,$F4` / `BPL` needs $2140 > $C0
+ * (e.g. $C1), not $80 — (int8)$C0 < (int8)$80 is false.
+ */
+const IPL_JUMP_KICK = 0xc1;
 
-/** Spin until $2140 equals value. Used after the low 32KiB has proven IPL is alive. */
+/** Spin until $2140 equals value (no timeout). */
 function emitWait2140Ack(bytes: number[], value: number): void {
   const loop = bytes.length;
   bytes.push(0xaf, 0x40, 0x21, 0x00, 0xc9, u8(value));
@@ -163,35 +164,30 @@ function emitWait2140(bytes: number[], value: number, jumpBrls?: number[]): void
   patchRel8(bytes, bne + 1, loop);
 }
 
-/** A already holds the expected $2140 echo. Clobbers X. */
-function emitWaitEcho(bytes: number[], jumpBrls?: number[]): void {
-  bytes.push(0xa2, 0x00, 0x00); // LDX #0
+/** A already holds the expected $2140 echo. */
+function emitWaitEchoAck(bytes: number[]): void {
   const loop = bytes.length;
   bytes.push(0xcf, 0x40, 0x21, 0x00); // CMP $002140
-  const beq = bytes.length;
-  bytes.push(0xf0, 0x00); // BEQ done
-  bytes.push(0xca); // DEX
   const bne = bytes.length;
-  bytes.push(0xd0, 0x00); // BNE loop
-  if (jumpBrls) {
-    jumpBrls.push(bytes.length + 1);
-    bytes.push(0x82, 0x00, 0x00);
-  }
-  const done = bytes.length;
-  patchRel8(bytes, beq + 1, done);
+  bytes.push(0xd0, 0x00);
   patchRel8(bytes, bne + 1, loop);
 }
 
-function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean, jumpBrls?: number[]): void {
+function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean, jumpBrls?: number[], ack = false): void {
   ldaSta(bytes, dest, 0x2142);
   ldaSta(bytes, dest >> 8, 0x2143);
   ldaSta(bytes, more ? 0x01 : 0x00, 0x2141);
   ldaSta(bytes, kick, 0x2140);
-  emitWait2140(bytes, kick, jumpBrls);
+  if (ack) emitWait2140Ack(bytes, kick);
+  else emitWait2140(bytes, kick, jumpBrls);
 }
 
-/** Low 32KiB: dest $0000 streams until IPL INC $01 hits $80 and BPL fails. */
-function emitIpl32k(bytes: number[], jumpBrls?: number[]): void {
+/**
+ * One IPL transfer, index = Y&$FF. After dest $0000 streams 32KiB, IPL INC $01
+ * to $80 and `BPL` fails, but `CMP Y,$F4` with Y=0 vs leftover $FF stays in
+ * Trans — the high half is the same command (not a new dest ≥ $8000 block).
+ */
+function emitIplStream(bytes: number[], count: number): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0
   const byteLoop = bytes.length;
   bytes.push(
@@ -200,56 +196,10 @@ function emitIpl32k(bytes: number[], jumpBrls?: number[]): void {
     0x98,                   // TYA
     0x8f, 0x40, 0x21, 0x00, // STA $002140
   );
-  emitWaitEcho(bytes, jumpBrls);
+  emitWaitEchoAck(bytes);
   bytes.push(
     0xc8,                   // INY
-    0xc0, 0x00, 0x80,       // CPY #$8000
-  );
-  const bneByte = bytes.length;
-  bytes.push(0xd0, 0x00);
-  patchRel8(bytes, bneByte + 1, byteLoop);
-}
-
-/**
- * High ARAM (dest ≥ $8000): IPL's index-mismatch path is `BPL` on dest high, so
- * each command stores one byte (index 0). The first byte is the index-0 of the
- * dest $8000 transfer pre-armed before the low 32KiB ends (so the leftover
- * $2140=$FF new-command does not restart dest $0000). Then one command per
- * byte through $FFBF. Waits until IPL acks (no timeout skip): DIR is at $8000,
- * so aborting leaves $FF STOP in sample RAM (PC e.g. $FE27).
- */
-function emitIplHighAram(bytes: number[]): void {
-  bytes.push(0xa0, 0x00, 0x00); // LDY #0
-  bytes.push(
-    0xb9, 0x00, 0x80,       // LDA $8000,Y
-    0x8f, 0x41, 0x21, 0x00, // STA $002141
-  );
-  ldaSta(bytes, 0x00, 0x2140);
-  emitWait2140Ack(bytes, 0x00);
-  bytes.push(0xc8); // INY
-  const byteLoop = bytes.length;
-  bytes.push(
-    0x98,                   // TYA  dest low
-    0x8f, 0x42, 0x21, 0x00, // STA $002142
-    0xc2, 0x20,             // REP #$20
-    0x98,                   // TYA
-    0xe2, 0x20,             // SEP #$20
-    0xeb,                   // XBA
-    0x18, 0x69, 0x80,       // CLC ADC #$80
-    0x8f, 0x43, 0x21, 0x00, // STA $002143
-  );
-  ldaSta(bytes, 0x01, 0x2141);
-  ldaSta(bytes, IPL_NEW_CMD, 0x2140);
-  emitWait2140Ack(bytes, IPL_NEW_CMD);
-  bytes.push(
-    0xb9, 0x00, 0x80,       // LDA $8000,Y
-    0x8f, 0x41, 0x21, 0x00, // STA $002141
-  );
-  ldaSta(bytes, 0x00, 0x2140);
-  emitWait2140Ack(bytes, 0x00);
-  bytes.push(
-    0xc8,                   // INY
-    0xc0, 0xc0, 0x7f,       // CPY #$7FC0
+    0xc0, u8(count), u8(count >> 8),
   );
   const bneByte = bytes.length;
   bytes.push(0xd0, 0x00);
@@ -275,11 +225,43 @@ export function spcTrampolineAddr(_state?: RhState1): number {
   return SPC_TRAMPOLINE_ADDR;
 }
 
+function findAramZeroRun(aram: Uint8Array, len: number, forbidden: [number, number][]): number {
+  let i = 0;
+  while (i + len <= aram.length) {
+    if (aram[i] !== 0) {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < aram.length && aram[j] === 0) j += 1;
+    if (j - i >= len && !forbidden.some(([a, b]) => i < b && a < i + len)) return i;
+    i = j;
+  }
+  return -1;
+}
+
+/** KON is write-triggered and reads back 0. Restart voices that still had an envelope. */
+function konRestart(dsp: Uint8Array, voices?: DspVoice[]): number {
+  let bits = 0;
+  for (let v = 0; v < 8; v += 1) {
+    const envx = dsp[v * 16 + 8] ?? 0;
+    const vol = voices?.[v]?.env_volume ?? 0;
+    const out = voices?.[v]?.env_out ?? 0;
+    if (envx !== 0 || vol !== 0 || out !== 0) bits |= 1 << v;
+  }
+  return bits & 0xff;
+}
+
+export interface SpcDspPoke {
+  table: number;
+  kon: number;
+}
+
 /**
- * SPC bytes IPL jumps to after the 64KiB ARAM copy. Restores PSW/SP/CONTROL/DP/X/Y/A
- * then JMP to the aligned opcode (IPL is a fresh fetch; ignore op_step).
+ * SPC bytes IPL jumps to after the ARAM copy. Restores PSW/SP/CONTROL/DP, copies
+ * DSP regs (KON is 0 in a capture — write-trigger it last), then X/Y/A and JMP.
  */
-export function spcResumeTrampoline(state: RhState1): { addr: number; bytes: Uint8Array; pc: number } {
+export function spcResumeTrampoline(state: RhState1, dspPoke?: SpcDspPoke | null): { addr: number; bytes: Uint8Array; pc: number } {
   const aram = getSectionDecoded(state, 'spc_aram');
   const spc = state.spc;
   const pc = alignSpcFetchPc(aram, spc?.pc ?? 0);
@@ -292,7 +274,10 @@ export function spcResumeTrampoline(state: RhState1): { addr: number; bytes: Uin
   const f1 = aram && aram.length > 0xf1 ? aram[0xf1]! : 0;
   const dp0 = aram && aram.length > 0 ? aram[0]! : 0;
   const dp1 = aram && aram.length > 1 ? aram[1]! : 0;
-  const bytes = Uint8Array.from([
+  const poke = dspPoke === undefined
+    ? dspPokeForState(state, pad(aram ?? new Uint8Array(0), 0x10000))
+    : dspPoke;
+  const out: number[] = [
     0xe8, psw,             // MOV A,#psw
     0x2d,                  // PUSH A
     0x8e,                  // POP PSW
@@ -301,21 +286,49 @@ export function spcResumeTrampoline(state: RhState1): { addr: number; bytes: Uin
     0x8f, f1, 0xf1,        // MOV $F1,#f1  (unmap IPL if bit7=0)
     0x8f, dp0, 0x00,       // MOV $00,#  (undo IPL dest word)
     0x8f, dp1, 0x01,       // MOV $01,#
+  ];
+  if (poke) {
+    out.push(0xcd, 0x00); // MOV X,#0
+    const loop = out.length;
+    out.push(0xf5, poke.table & 0xff, (poke.table >> 8) & 0xff); // MOV A,!table+X
+    out.push(0xd8, 0xf2); // MOV $F2,X
+    out.push(0xc4, 0xf3); // MOV $F3,A
+    out.push(0x3d); // INC X
+    const bpl = out.length;
+    out.push(0x10, 0x00); // BPL loop (X=0..$7F)
+    out[bpl + 1] = (loop - (bpl + 2)) & 0xff;
+    out.push(0x8f, 0x4c, 0xf2); // MOV $F2,#$4C
+    out.push(0x8f, poke.kon & 0xff, 0xf3); // MOV $F3,#kon
+  }
+  out.push(
     0xcd, x,               // MOV X,#x
     0x8d, y,               // MOV Y,#y
     0xe8, a,               // MOV A,#a
     0x5f, pc & 0xff, (pc >> 8) & 0xff, // JMP !pc
+  );
+  return { addr, bytes: Uint8Array.from(out), pc };
+}
+
+function dspPokeForState(state: RhState1, aram: Uint8Array): SpcDspPoke | null {
+  const dsp = getSectionDecoded(state, 'dsp');
+  if (!dsp || dsp.length < 0x80) return null;
+  const esa = (dsp[0x6d] ?? 0) << 8;
+  const edl = (dsp[0x7d] ?? 0) & 0x0f;
+  const echoLen = edl === 0 ? 0 : edl * 0x800;
+  const table = findAramZeroRun(aram, 0x80, [
+    [0, 0x100],
+    [SPC_TRAMPOLINE_ADDR, SPC_TRAMPOLINE_ADDR + 0x80],
+    [esa, esa + echoLen],
+    [0xffc0, 0x10000],
   ]);
-  return { addr, bytes, pc };
+  if (table < 0) return null;
+  return { table, kon: konRestart(dsp, state.dsp_voices) };
 }
 
 /**
- * SPC IPL: dest $0000 streams 32KiB (IPL stops when dest high bit7 is set).
- * Dest ≥ $8000 cannot stream: index mismatch `BPL`s on dest high, so each
- * command is one byte (index 0) through $FFBF. After $AA, a wait timeout BRLs
- * to the trampoline jump so $4200 is still written. Jump kick is $80 (IPL Y=1
- * after a 1-byte command). Trampoline is at $0386 in the first 32KiB (not
- * $FF80 — that region never lands if leftover $2140=$FF restarts dest $0000).
+ * SPC IPL: one dest $0000 transfer. After 32KiB, dest high is $80 and IPL Y=0
+ * still in Trans (`CMP Y,$F4` / `BPL` on leftover $FF), so the high half is the
+ * same stream through $FFBF. Jump kick $C1 (Y=$C0). Trampoline at $0386.
  * No-$AA skip jumps IPL to $0386 ($2141=0).
  */
 function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuRegs?: number[]): void {
@@ -344,16 +357,11 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
 
   bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
   emitIplKick(bytes, 0x0000, 0xcc, true, jumpBrls);
-  // Next dest in 2142/43 so the $FF leftover after 32KiB is a command to $8000,
-  // not a restart of dest $0000 (IPL dest lives in $00/$01 during the stream).
-  ldaSta(bytes, 0x00, 0x2142);
-  ldaSta(bytes, 0x80, 0x2143);
-  emitIpl32k(bytes, jumpBrls);
-  ldaSta(bytes, 0x01, 0x2141); // leftover $2140=$FF must be transfer, not JMP $8000
+  emitIplStream(bytes, 0x8000);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  emitIplHighAram(bytes);
+  emitIplStream(bytes, 0x7fc0);
   const doJump = bytes.length;
-  emitIplKick(bytes, spcPc & 0xffff, IPL_JUMP_KICK, false);
+  emitIplKick(bytes, spcPc & 0xffff, IPL_JUMP_KICK, false, undefined, true);
   const regs = cpuRegs ?? [0, 0, 0, 0];
   for (let i = 0; i < 4; i += 1) {
     ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);
@@ -620,7 +628,22 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   payload.set(pad(wram, 0x20000), 0);
   payload.set(pad(getSectionDecoded(work, 'vram'), 0x10000), WRAM_BANKS * LOROM_BANK);
   const aramPayload = pad(getSectionDecoded(work, 'spc_aram'), 0x10000);
-  const spcTramp = spcResumeTrampoline(work);
+  const dspPoke = dspPokeForState(work, aramPayload);
+  const spcTramp = spcResumeTrampoline(work, dspPoke);
+  if (spcTramp.addr < aramPayload.length) {
+    aramPayload[spcTramp.addr] = 0xff; // STOP if IPL jumps here without overlay
+  }
+  if (spcTramp.addr + spcTramp.bytes.length <= aramPayload.length) {
+    aramPayload.set(spcTramp.bytes, spcTramp.addr);
+  }
+  if (dspPoke) {
+    const dsp = getSectionDecoded(work, 'dsp');
+    if (dsp && dsp.length >= 0x80) {
+      const table = pad(dsp.subarray(0, 0x80), 0x80);
+      table[0x4c] = 0; // KON mid-loop is a no-op; trampoline write-triggers after
+      aramPayload.set(table, dspPoke.table);
+    }
+  }
   if (spcTramp.addr < aramPayload.length) {
     aramPayload[spcTramp.addr] = 0xff; // STOP if IPL jumps here without overlay
   }

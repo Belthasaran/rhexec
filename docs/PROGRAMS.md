@@ -26,7 +26,7 @@ npm run rhcap1-mesen -- --rom <file.sfc|file.smc> --mode auto|manual [--out path
 
 ### rhboot1-sfc
 
-Technique A: new SFC with reset trampoline plus WRAM/VRAM/CGRAM/OAM/ARAM payload. Re-enables NMI (`$4200`) and unblanks INIDISP. Timed SPC IPL uploads ARAM (32KiB from `$0000` with dest `$8000` pre-armed, then one byte per command for `$8000–$FFBF`), then a trampoline at `$0386` restores SPC GPRs/`$F1`/`$00/$01` and jumps to the aligned captured PC. After `$AA` the jump always runs; no-`$AA` skip jumps IPL to STOP at `$0386` so later game APUIO cannot hijack. Does not patch `$05D89B`/`$05DCDD`. SA-1 and DSP envelopes are not restored.
+Technique A: new SFC with reset trampoline plus WRAM/VRAM/CGRAM/OAM/ARAM payload. Re-enables NMI (`$4200`) and unblanks INIDISP. One SPC IPL transfer from dest `$0000` covers `$0000–$FFBF` (after 32KiB IPL stays in Trans at dest `$8000`; the high half is not a new command). Jump kick `$C1` (Y=`$C0`). Trampoline at `$0386` restores CONTROL/DP, copies DSP regs, write-triggers KON from captured ENVX, then `JMP`s the aligned captured PC. After `$AA` the jump always runs; no-`$AA` skip jumps IPL to STOP at `$0386`. Does not patch `$05D89B`/`$05DCDD`. SA-1 is not restored.
 
 ```bash
 npm run rhboot1-sfc -- --rom <sfc> --state <rhstate1> [--out file-boot.sfc] [--level HEX] [--ow-submap N --ow-x N --ow-y N]
