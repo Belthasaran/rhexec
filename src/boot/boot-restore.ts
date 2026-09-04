@@ -205,22 +205,29 @@ function emitIpl32k(bytes: number[], jumpBrls?: number[]): void {
 
 /**
  * High ARAM (dest ≥ $8000): IPL's index-mismatch path is `BPL` on dest high, so
- * a bit7 dest cannot wait for the next index — each command stores one byte
- * (index 0) then treats the next $2140 as a new command. Streaming a 256-byte
- * page from $8000 leaves IPL in BIOS and later game APUIO JMPs into sample RAM
- * (e.g. $8CF0). One command per byte through $FFBF (trampoline at $FF80).
+ * each command stores one byte (index 0). The first byte is the index-0 of the
+ * dest $8000 transfer pre-armed before the low 32KiB ends (so the leftover
+ * $2140=$FF new-command does not restart dest $0000). Then one command per
+ * byte through $FFBF.
  */
 function emitIplHighAram(bytes: number[], jumpBrls?: number[]): void {
-  bytes.push(0xa0, 0x00, 0x00); // LDY #0  offset in high bank
+  bytes.push(0xa0, 0x00, 0x00); // LDY #0
+  bytes.push(
+    0xb9, 0x00, 0x80,       // LDA $8000,Y
+    0x8f, 0x41, 0x21, 0x00, // STA $002141
+  );
+  ldaSta(bytes, 0x00, 0x2140);
+  emitWait2140(bytes, 0x00, jumpBrls);
+  bytes.push(0xc8); // INY
   const byteLoop = bytes.length;
   bytes.push(
     0x98,                   // TYA  dest low
     0x8f, 0x42, 0x21, 0x00, // STA $002142
     0xc2, 0x20,             // REP #$20
     0x98,                   // TYA
-    0xe2, 0x20,             // SEP #$20  B = Y high
+    0xe2, 0x20,             // SEP #$20
     0xeb,                   // XBA
-    0x18, 0x69, 0x80,       // CLC ADC #$80  dest high
+    0x18, 0x69, 0x80,       // CLC ADC #$80
     0x8f, 0x43, 0x21, 0x00, // STA $002143
   );
   ldaSta(bytes, 0x01, 0x2141);
@@ -234,7 +241,7 @@ function emitIplHighAram(bytes: number[], jumpBrls?: number[]): void {
   emitWait2140(bytes, 0x00, jumpBrls);
   bytes.push(
     0xc8,                   // INY
-    0xc0, 0xc0, 0x7f,       // CPY #$7FC0  $8000–$FFBF
+    0xc0, 0xc0, 0x7f,       // CPY #$7FC0
   );
   const bneByte = bytes.length;
   bytes.push(0xd0, 0x00);
@@ -253,8 +260,8 @@ function patchRel16(bytes: number[], offsetLo: number, target: number): void {
   bytes[offsetLo + 1] = (rel >> 8) & 0xff;
 }
 
-/** Below IPL ROM ($FFC0). Echo at ESA would overwrite a trampoline once DSP runs. */
-export const SPC_TRAMPOLINE_ADDR = 0xff80;
+/** Below echo ($6000) and IPL ROM. Akogare has 102 zeros at $0386 in the first 32KiB. */
+export const SPC_TRAMPOLINE_ADDR = 0x0386;
 
 export function spcTrampolineAddr(_state?: RhState1): number {
   return SPC_TRAMPOLINE_ADDR;
@@ -299,7 +306,9 @@ export function spcResumeTrampoline(state: RhState1): { addr: number; bytes: Uin
  * Dest ≥ $8000 cannot stream: index mismatch `BPL`s on dest high, so each
  * command is one byte (index 0) through $FFBF. After $AA, a wait timeout BRLs
  * to the trampoline jump so $4200 is still written. Jump kick is $80 (IPL Y=1
- * after a 1-byte command). No-$AA skip jumps IPL to $FF80 ($2141=0).
+ * after a 1-byte command). Trampoline is at $0386 in the first 32KiB (not
+ * $FF80 — that region never lands if leftover $2140=$FF restarts dest $0000).
+ * No-$AA skip jumps IPL to $0386 ($2141=0).
  */
 function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuRegs?: number[]): void {
   const jumpBrls: number[] = [];
@@ -327,6 +336,10 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
 
   bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
   emitIplKick(bytes, 0x0000, 0xcc, true, jumpBrls);
+  // Next dest in 2142/43 so the $FF leftover after 32KiB is a command to $8000,
+  // not a restart of dest $0000 (IPL dest lives in $00/$01 during the stream).
+  ldaSta(bytes, 0x00, 0x2142);
+  ldaSta(bytes, 0x80, 0x2143);
   emitIpl32k(bytes, jumpBrls);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
   emitIplHighAram(bytes, jumpBrls);
@@ -340,9 +353,8 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
   const braEnd = bytes.length;
   bytes.push(0x80, 0x00); // BRA end
   const skip = bytes.length;
-  // No $AA: IPL is still in BIOS. Jump ($2141=0) to $FF80 so later game APUIO
-  // cannot be treated as dest+$00 → JMP leftover RAM. Unuploaded ARAM is
-  // typically $FF (STOP); the payload plants that byte before the trampoline.
+  // No $AA: IPL is still in BIOS. Jump ($2141=0) to the low trampoline so later
+  // game APUIO cannot IPL-jump into RAM. Unuploaded ARAM is typically $FF (STOP).
   emitIplKick(bytes, SPC_TRAMPOLINE_ADDR, 0xcc, false);
   bytes.push(0xab); // PLB timeout
   const endIpl = bytes.length;

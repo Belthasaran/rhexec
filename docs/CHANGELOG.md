@@ -1,5 +1,6 @@
 # Changelog
 
+- **0.2.21:** After the low 32KiB, leftover `$2140=$FF` with IPL Y=0 is a new command back to dest `$0000`, so `$FF80` never landed (PC in unmapped `$FFDE`). Pre-arm dest `$8000` before the stream ends; trampoline moved to the `$0386` zero run in the first 32KiB. Rebuild the SFC.
 - **0.2.20:** Dest ≥ `$8000` cannot stream: IPL waits for the next index with `BPL` on dest high, so a bit7 dest stores one byte then treats later `$2140` as a new command — game APUIO JMP'd into sample RAM (`$8CF0`). High ARAM is one IPL command per byte through `$FFBF`. Rebuild the SFC.
 - **0.2.19:** After the `$FF00–$FFBF` page IPL Y is `$C0`, so a `$2140=$80` jump is ignored (`CMP Y,$F4` / `BPL`) and the APU never hits the `$FF80` trampoline (PC wanders, e.g. `$38F3`). Jump kick is last-index+2 (`$C1`). Rebuild the SFC.
 - **0.2.18:** High ARAM cannot be a second 32KiB IPL stream: dest `$8000` already has bit7, so the transfer ends after 256 bytes and the stub never reached `$4200` (`$7E0010` stayed 0). High half is 256-byte pages with a bit7 `$2140` kick; last page stops at `$FFC0`. After `$AA`, a wait timeout still jumps to `$FF80`. Rebuild the SFC.
