@@ -134,8 +134,8 @@ function packDmaRegs(state: RhState1): Uint8Array {
 
 /** After a dest-high bit7 transfer ends, IPL waits for $2140 with bit7 set. */
 const IPL_NEW_CMD = 0x80;
-/** Last byte of $FF00–$FFBF is index $BF, then IPL Y=$C0. New command needs $2140 > Y (`CMP Y,$F4` / `BPL` stay). $80 is not greater than $C0. */
-const IPL_JUMP_KICK = 0xbf + 2;
+/** After each high 1-byte command IPL Y=1, so $80 is a new command. */
+const IPL_JUMP_KICK = IPL_NEW_CMD;
 
 /** Kick/byte echo spin. 16-bit X=0 → 65536. Optional BRL to the trampoline jump. */
 function emitWait2140(bytes: number[], value: number, jumpBrls?: number[]): void {
@@ -204,16 +204,17 @@ function emitIpl32k(bytes: number[], jumpBrls?: number[]): void {
 }
 
 /**
- * High ARAM: dest high already has bit7, so each IPL command stores 256 bytes
- * and ends (INC $01 / BPL fail). A 32KiB stream from $8000 deadlocks after one
- * page and never reaches $4200. Last page $FF00 stops at $FFC0 so INC $01
- * cannot wrap to $00 and keep transferring.
+ * High ARAM (dest ≥ $8000): IPL's index-mismatch path is `BPL` on dest high, so
+ * a bit7 dest cannot wait for the next index — each command stores one byte
+ * (index 0) then treats the next $2140 as a new command. Streaming a 256-byte
+ * page from $8000 leaves IPL in BIOS and later game APUIO JMPs into sample RAM
+ * (e.g. $8CF0). One command per byte through $FFBF (trampoline at $FF80).
  */
 function emitIplHighAram(bytes: number[], jumpBrls?: number[]): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0  offset in high bank
-  const pageLoop = bytes.length;
+  const byteLoop = bytes.length;
   bytes.push(
-    0x98,                   // TYA  dest low = 0 at page start
+    0x98,                   // TYA  dest low
     0x8f, 0x42, 0x21, 0x00, // STA $002142
     0xc2, 0x20,             // REP #$20
     0x98,                   // TYA
@@ -225,46 +226,19 @@ function emitIplHighAram(bytes: number[], jumpBrls?: number[]): void {
   ldaSta(bytes, 0x01, 0x2141);
   ldaSta(bytes, IPL_NEW_CMD, 0x2140);
   emitWait2140(bytes, IPL_NEW_CMD, jumpBrls);
-  const byteLoop = bytes.length;
   bytes.push(
     0xb9, 0x00, 0x80,       // LDA $8000,Y
     0x8f, 0x41, 0x21, 0x00, // STA $002141
-    0x98,                   // TYA  index = Y low
-    0x8f, 0x40, 0x21, 0x00, // STA $002140
   );
-  emitWaitEcho(bytes, jumpBrls);
+  ldaSta(bytes, 0x00, 0x2140);
+  emitWait2140(bytes, 0x00, jumpBrls);
   bytes.push(
     0xc8,                   // INY
-    0x98,                   // TYA
+    0xc0, 0xc0, 0x7f,       // CPY #$7FC0  $8000–$FFBF
   );
   const bneByte = bytes.length;
-  bytes.push(0xd0, 0x00); // BNE byteLoop until Y low wraps
+  bytes.push(0xd0, 0x00);
   patchRel8(bytes, bneByte + 1, byteLoop);
-  bytes.push(0xc0, 0x00, 0x7f); // CPY #$7F00  done $8000–$FEFF
-  const bnePage = bytes.length;
-  bytes.push(0xd0, 0x00);
-  patchRel8(bytes, bnePage + 1, pageLoop);
-
-  ldaSta(bytes, 0x00, 0x2142);
-  ldaSta(bytes, 0xff, 0x2143);
-  ldaSta(bytes, 0x01, 0x2141);
-  ldaSta(bytes, IPL_NEW_CMD, 0x2140);
-  emitWait2140(bytes, IPL_NEW_CMD, jumpBrls);
-  const ffLoop = bytes.length;
-  bytes.push(
-    0xb9, 0x00, 0x80,       // LDA $8000,Y
-    0x8f, 0x41, 0x21, 0x00,
-    0x98,
-    0x8f, 0x40, 0x21, 0x00,
-  );
-  emitWaitEcho(bytes, jumpBrls);
-  bytes.push(
-    0xc8,                   // INY
-    0xc0, 0xc0, 0x7f,       // CPY #$7FC0  $FF00–$FFBF (trampoline at $FF80)
-  );
-  const bneFf = bytes.length;
-  bytes.push(0xd0, 0x00);
-  patchRel8(bytes, bneFf + 1, ffLoop);
 }
 
 function patchRel8(bytes: number[], offsetByte: number, target: number): void {
@@ -322,10 +296,10 @@ export function spcResumeTrampoline(state: RhState1): { addr: number; bytes: Uin
 
 /**
  * SPC IPL: dest $0000 streams 32KiB (IPL stops when dest high bit7 is set).
- * Dest $8000 cannot stream 32KiB — bit7 is already set, so each command is
- * one 256-byte page. After $AA, a wait timeout BRLs to the trampoline jump
- * so $4200 is still written. Jump kick is $C1 (last $FF00-page index + 2).
- * No-$AA skip jumps IPL to $FF80 ($2141=0).
+ * Dest ≥ $8000 cannot stream: index mismatch `BPL`s on dest high, so each
+ * command is one byte (index 0) through $FFBF. After $AA, a wait timeout BRLs
+ * to the trampoline jump so $4200 is still written. Jump kick is $80 (IPL Y=1
+ * after a 1-byte command). No-$AA skip jumps IPL to $FF80 ($2141=0).
  */
 function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuRegs?: number[]): void {
   const jumpBrls: number[] = [];

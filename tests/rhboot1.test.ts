@@ -201,10 +201,11 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.equal(findSeq(stub, [0xa9, 0x60, 0x8f, 0x43, 0x21, 0x00]), -1, 'DSP ESA $60 is not the jump dest');
   assert.ok(countSeq(stub, [0xa9, 0x00, 0x8f, 0x41, 0x21, 0x00]) >= 2, 'jump kicks $2141=0 (success + no-AA STOP)');
   assert.equal(countSeq(stub, [0xc0, 0x00, 0x80]), 1, 'only the low 32KiB streams to CPY #$8000');
-  assert.ok(findSeq(stub, [0xc0, 0x00, 0x7f]) >= 0, 'high ARAM page loop CPY #$7F00');
-  assert.ok(findSeq(stub, [0xc0, 0xc0, 0x7f]) >= 0, 'last page CPY #$7FC0 covers trampoline');
-  assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'post-32k IPL kick has bit7 set');
-  assert.ok(findSeq(stub, [0xa9, 0xc1, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'trampoline jump kick $C1 (last index $BF + 2)');
+  assert.equal(findSeq(stub, [0xc0, 0x00, 0x7f]), -1, 'no 256-byte high page CPY #$7F00');
+  assert.ok(findSeq(stub, [0xc0, 0xc0, 0x7f]) >= 0, 'high ARAM 1-byte loop CPY #$7FC0');
+  assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'high IPL kick has bit7 set');
+  assert.ok(findSeq(stub, [0xa9, 0x00, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'high IPL sends index 0 each byte');
+  assert.equal(findSeq(stub, [0xa9, 0xc1, 0x8f, 0x40, 0x21, 0x00]), -1, 'jump kick is not $C1 (1-byte high leaves Y=1)');
   assert.equal(findSeq(stub, [0xa9, 0x01, 0x8f, 0x40, 0x21, 0x00]), -1, 'kick $01 does not start the high half');
   const tramp = spcResumeTrampoline(st);
   assert.equal(tramp.addr, 0xff80);
