@@ -17,6 +17,7 @@ local last_1dff = 0
 local last_aram02 = 0
 local last_aram06 = 0
 local last_ch31 = 0
+local last_aram0388 = 0
 local last_spc_y = 0
 local last_spc_a = 0
 local last_spc_x = 0
@@ -104,8 +105,8 @@ local function debug_log(hid, msg)
   local f = io.open(DEBUG_LOG_PATH, "a")
   if not f then return end
   f:write(string.format(
-    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcX":%d,"spcA":%d,"spcSp":%d,"cpuA":%d,"cpuP":%d,"destLo":%d,"destHi":%d,"wram10":%d,"wram0100":%d,"wram1dfb":%d,"wram1dff":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d,"apuio2":%d,"aram02":%d,"aram06":%d,"ch31":%d,"aramPc":%d,"aram11b0":%d,"aram0549":%d,"f1":%d,"fa":%d,"fd":%d,"stackRet":%d,"tramp0":%d},"timestamp":%d,"runId":"post-fix-043"}\n',
-    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_x), as_num(last_spc_a), as_num(last_spc_sp), as_num(last_cpu_a), as_num(last_cpu_p), as_num(last_dest_lo), as_num(last_dest_hi), as_num(last_10), as_num(last_0100), as_num(last_1dfb), as_num(last_1dff), as_num(last_4200), as_num(last_2140), as_num(last_2141), as_num(last_2142), as_num(last_aram02), as_num(last_aram06), as_num(last_ch31), as_num(last_aram_pc), as_num(last_aram_11b0), as_num(last_aram_0549), as_num(last_f1), as_num(last_fa), as_num(last_fd), as_num(last_stack_ret), as_num(last_tramp0), (os.time() * 1000)
+    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcX":%d,"spcA":%d,"spcSp":%d,"cpuA":%d,"cpuP":%d,"destLo":%d,"destHi":%d,"wram10":%d,"wram0100":%d,"wram1dfb":%d,"wram1dff":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d,"apuio2":%d,"aram02":%d,"aram06":%d,"ch31":%d,"aram0388":%d,"aramPc":%d,"aram11b0":%d,"aram0549":%d,"f1":%d,"fa":%d,"fd":%d,"stackRet":%d,"tramp0":%d},"timestamp":%d,"runId":"post-fix-044"}\n',
+    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_x), as_num(last_spc_a), as_num(last_spc_sp), as_num(last_cpu_a), as_num(last_cpu_p), as_num(last_dest_lo), as_num(last_dest_hi), as_num(last_10), as_num(last_0100), as_num(last_1dfb), as_num(last_1dff), as_num(last_4200), as_num(last_2140), as_num(last_2141), as_num(last_2142), as_num(last_aram02), as_num(last_aram06), as_num(last_ch31), as_num(last_aram0388), as_num(last_aram_pc), as_num(last_aram_11b0), as_num(last_aram_0549), as_num(last_f1), as_num(last_fa), as_num(last_fd), as_num(last_stack_ret), as_num(last_tramp0), (os.time() * 1000)
   ))
   f:close()
 end
@@ -147,6 +148,7 @@ local function peek_spc(spcRam)
   last_tramp0 = as_num(read_byte(0x0386, spcRam))
   last_aram02 = as_num(read_byte(0x0002, spcRam))
   last_aram06 = as_num(read_byte(0x0006, spcRam))
+  last_aram0388 = as_num(read_byte(0x0388, spcRam))
   last_ch31 = as_num(read_byte(0x0031, spcRam)) + 256 * as_num(read_byte(0x0032, spcRam))
   local sp = as_num(last_spc_sp) % 256
   last_stack_ret = as_num(read_byte(0x100 + ((sp + 1) % 256), spcRam)) + 256 * as_num(read_byte(0x100 + ((sp + 2) % 256), spcRam))

@@ -26,7 +26,7 @@ npm run rhcap1-mesen -- --rom <file.sfc|file.smc> --mode auto|manual [--out path
 
 ### rhboot1-sfc
 
-Technique A: new SFC with reset trampoline plus WRAM/VRAM/CGRAM/OAM/ARAM payload. Re-enables NMI (`$4200`) and unblanks INIDISP. SPC IPL plants a copier at `$FF80`, then the copier copies `$0000–$FF7F` (handshake tracks copier X, skip 0 after wrap, skip page0 `$F0–$FF`) and `JMP`s `$0386`. The trampoline restores CONTROL/DP/`$F8–$FC`, copies DSP regs, write-triggers KON from captured ENVX, signals `$F4=$A5`, arms N-SPC `$02`/`$06` from `$0DDA`, then `JMP`s the timer wait. The SNES waits for that `$A5` before `$4200` and holds the song id on `$2142` (`$1DFB`/`$1DFF` stay 0 so AMK NMI cannot clobber it). No-`$AA` skip jumps IPL to STOP at `$0386`. Does not patch `$05D89B`/`$05DCDD`. SA-1 is not restored.
+Technique A: new SFC with reset trampoline plus WRAM/VRAM/CGRAM/OAM/ARAM payload. Re-enables NMI (`$4200`) and unblanks INIDISP. SPC IPL plants a copier at `$FF80`, then the copier copies `$0000–$FF7F` (handshake tracks copier X, skip 0 after wrap, skip page0 `$F0–$FF`) and `JMP`s `$0386`. The trampoline restores CONTROL/DP/`$F8–$FC`, copies DSP regs, write-triggers KON from captured ENVX, signals `$F4=$A5`, arms N-SPC `$02`/`$06` from `$0DDA`, zeros flags `$0386–$0389`, then `JMP`s the timer wait. The SNES waits for that `$A5` before `$4200` and holds the song id on `$2142` (`$1DFB`/`$1DFF` stay 0 so AMK NMI cannot clobber it). No-`$AA` skip jumps IPL to STOP at `$0386`. Does not patch `$05D89B`/`$05DCDD`. SA-1 is not restored.
 
 ```bash
 npm run rhboot1-sfc -- --rom <sfc> --state <rhstate1> [--out file-boot.sfc] [--level HEX] [--ow-submap N --ow-x N --ow-y N]

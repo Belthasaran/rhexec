@@ -241,6 +241,7 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.equal(tramp.pc, 0x0549);
   assert.deepEqual([...body.subarray(aramOffset + 0x0386, aramOffset + 0x0386 + tramp.bytes.length)], [...tramp.bytes]);
   assert.ok(findSeq(tramp.bytes, [0x5f, 0x49, 0x05]) >= 0, 'trampoline JMP $0549 timer wait');
+  assert.ok(findSeq(tramp.bytes, [0xc5, 0x86, 0x03, 0xc5, 0x87, 0x03, 0xc5, 0x88, 0x03]) >= 0, 'restore N-SPC flags $0386–$0388 to 0 before JMP');
   assert.equal(findSeq(tramp.bytes, [0x5f, 0xb0, 0x11]), -1, 'does not JMP mid-CALL $11B0');
   assert.ok(findSeq(tramp.bytes, [0xcd, 0xcf, 0xbd]) >= 0, 'empty stack $CF not capture $CD');
   assert.ok(findSeq(tramp.bytes, [0x8f, 0xa5, 0xf4]) >= 0, 'trampoline sentinel $A5 on $F4');
