@@ -183,9 +183,9 @@ function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean,
 }
 
 /**
- * One IPL transfer, index = Y&$FF. After dest $0000 streams 32KiB, IPL INC $01
- * to $80 and `BPL` fails, but `CMP Y,$F4` with Y=0 vs leftover $FF stays in
- * Trans — the high half is the same command (not a new dest ≥ $8000 block).
+ * One IPL transfer, index = Y&$FF. Dest $0000 streams 32KiB; IPL INC $01 to $80
+ * and the dest-high `BPL` fails. Dest ≥ $8000 then holds only 256 bytes per
+ * command — a second 32KiB stream waits forever (CPU CMP $2140, SPC in RAM).
  */
 function emitIplStream(bytes: number[], count: number): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0
@@ -204,6 +204,74 @@ function emitIplStream(bytes: number[], count: number): void {
   const bneByte = bytes.length;
   bytes.push(0xd0, 0x00);
   patchRel8(bytes, bneByte + 1, byteLoop);
+}
+
+/** 256-byte IPL page. Index is Y low; exits when Y low wraps. Y is 16-bit. */
+function emitIplIndexPage(bytes: number[]): void {
+  const byteLoop = bytes.length;
+  bytes.push(
+    0xb9, 0x00, 0x80,       // LDA $8000,Y
+    0x8f, 0x41, 0x21, 0x00, // STA $002141
+    0x98,                   // TYA
+    0x8f, 0x40, 0x21, 0x00, // STA $002140
+  );
+  emitWaitEchoAck(bytes);
+  bytes.push(0xc8, 0x98); // INY / TYA (Y low)
+  const bne = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bne + 1, byteLoop);
+}
+
+/**
+ * High ARAM: first 256 bytes continue dest $8000, then one new command per
+ * 256-byte page ($8100–$FE00), last page $FF00–$FFBF, jump kick $C1.
+ */
+function emitIplHighPaged(bytes: number[]): void {
+  bytes.push(0xa0, 0x00, 0x00); // LDY #0  dest $8000 page
+  emitIplIndexPage(bytes);
+  bytes.push(0xa2, 0x01, 0x00); // LDX #$0001  dest $8100
+  const pageLoop = bytes.length;
+  ldaSta(bytes, 0x00, 0x2142);
+  bytes.push(
+    0x8a,                   // TXA
+    0x18, 0x69, 0x80,       // CLC ADC #$80
+    0x8f, 0x43, 0x21, 0x00, // STA $002143
+  );
+  ldaSta(bytes, 0x01, 0x2141);
+  ldaSta(bytes, 0x80, 0x2140);
+  emitWait2140Ack(bytes, 0x80);
+  bytes.push(
+    0xc2, 0x20,             // REP #$20
+    0x8a,                   // TXA
+    0xeb,                   // XBA  Y = page << 8
+    0xa8,                   // TAY
+    0xe2, 0x20,             // SEP #$20
+  );
+  emitIplIndexPage(bytes);
+  bytes.push(
+    0xe8,                   // INX
+    0xe0, 0x7f, 0x00,       // CPX #$007F
+  );
+  const bnePage = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bnePage + 1, pageLoop);
+  emitIplKick(bytes, 0xff00, 0x80, true, undefined, true);
+  bytes.push(0xa0, 0x00, 0x7f); // LDY #$7F00
+  const lastLoop = bytes.length;
+  bytes.push(
+    0xb9, 0x00, 0x80,
+    0x8f, 0x41, 0x21, 0x00,
+    0x98,
+    0x8f, 0x40, 0x21, 0x00,
+  );
+  emitWaitEchoAck(bytes);
+  bytes.push(
+    0xc8,
+    0xc0, 0xc0, 0x7f,       // CPY #$7FC0
+  );
+  const bneLast = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bneLast + 1, lastLoop);
 }
 
 function patchRel8(bytes: number[], offsetByte: number, target: number): void {
@@ -326,10 +394,10 @@ function dspPokeForState(state: RhState1, aram: Uint8Array): SpcDspPoke | null {
 }
 
 /**
- * SPC IPL: one dest $0000 transfer. After 32KiB, dest high is $80 and IPL Y=0
- * still in Trans (`CMP Y,$F4` / `BPL` on leftover $FF), so the high half is the
- * same stream through $FFBF. Jump kick $C1 (Y=$C0). Trampoline at $0386.
- * No-$AA skip jumps IPL to $0386 ($2141=0).
+ * SPC IPL: dest $0000 streams 32KiB. Dest ≥ $8000 is 256-byte pages (new
+ * command after Y wraps — a second 32KiB stream deadlocks). Last page
+ * $FF00–$FFBF, jump kick $C1 (Y=$C0). Trampoline at $0386. No-$AA skip
+ * jumps IPL to $0386 ($2141=0).
  */
 function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuRegs?: number[]): void {
   const jumpBrls: number[] = [];
@@ -359,7 +427,7 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
   emitIplKick(bytes, 0x0000, 0xcc, true, jumpBrls);
   emitIplStream(bytes, 0x8000);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  emitIplStream(bytes, 0x7fc0);
+  emitIplHighPaged(bytes);
   const doJump = bytes.length;
   emitIplKick(bytes, spcPc & 0xffff, IPL_JUMP_KICK, false, undefined, true);
   const regs = cpuRegs ?? [0, 0, 0, 0];

@@ -24,10 +24,9 @@
         sta     $2100
         lda     #$00
         sta     $4200
-        ; DMA WRAM, VRAM, CGRAM, OAM. One SPC IPL transfer dest $0000: 32KiB,
-        ; then the same Trans continues $8000–$FFBF (Y=0 leftover $FF is not a
-        ; new command). Jump kick $C1 (Y=$C0). No-$AA skip to STOP at $0386.
-        ; Trampoline at $0386: DSP regs + KON, restore GPRs, JMP aligned PC.
+        ; DMA WRAM, VRAM, CGRAM, OAM. SPC IPL dest $0000 32KiB, then 256-byte
+        ; pages $8000–$FE00, last page $FF00–$FFBF, jump kick $C1 (Y=$C0).
+        ; No-$AA skip to STOP at $0386. Trampoline: DSP regs + KON, JMP PC.
 ; APUIO/PPU/CPU MMIO are STA/LDA long ($00:xxxx) because DBR may not be 0.
 ; poke PPU (scrolls write-twice), $4300–$437F
 ; restore A,X,Y,DB,P then INIDISP + $4200 and jml !PC
