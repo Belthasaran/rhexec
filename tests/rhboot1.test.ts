@@ -194,7 +194,8 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.ok(obsel >= 0, 'STA $2101 with packed OBSEL $03');
   assert.ok(findSeq(stub, [0xc9, 0xaa]) >= 0, 'IPL waits for $AA');
   assert.ok(findSeq(stub, [0x8f, 0x42, 0x21, 0x00]) >= 0, 'IPL writes dest $2142');
-  assert.ok(findSeq(stub, [0xcf, 0x40, 0x21, 0x00, 0xf0]) >= 0, 'IPL byte wait is timed (CMP / BEQ)');
+  assert.ok(findSeq(stub, [0xcf, 0x40, 0x21, 0x00, 0xd0]) >= 0, 'copier-fed stream waits infinitely (CMP / BNE)');
+  assert.ok(findSeq(stub, [0xcf, 0x40, 0x21, 0x00, 0xf0]) >= 0, 'plant stream wait is still timed (CMP / BEQ)');
   assert.ok(findSeq(stub, [0xa9, 0x11, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'restore APUIO $2140 from cpu_regs');
   assert.ok(findSeq(stub, [0xa9, 0x22, 0x8f, 0x41, 0x21, 0x00]) >= 0, 'restore APUIO $2141 from cpu_regs');
   assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'IPL dest low $FF80 (copier)');
