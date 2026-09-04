@@ -12,7 +12,9 @@ local last_2140 = 0
 local last_2141 = 0
 local last_spc_y = 0
 local last_spc_a = 0
+local last_spc_x = 0
 local last_cpu_a = 0
+local last_cpu_p = 0
 local result_path = RESULT_DIR .. "/nmi_probe.json"
 local done_path = RESULT_DIR .. "/done"
 local failed_path = RESULT_DIR .. "/failed"
@@ -51,7 +53,9 @@ local function snapshot_state()
   last_spc = as_num(st["spc.pc"] or st.spcPc or 0)
   last_spc_y = as_num(st["spc.y"])
   last_spc_a = as_num(st["spc.a"])
+  last_spc_x = as_num(st["spc.x"])
   last_cpu_a = as_num(st["cpu.a"])
+  last_cpu_p = as_num(st["cpu.ps"] or st["cpu.p"])
 end
 
 local function spc_region(pc)
@@ -69,8 +73,8 @@ local function debug_log(hid, msg)
   local f = io.open(DEBUG_LOG_PATH, "a")
   if not f then return end
   f:write(string.format(
-    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcA":%d,"cpuA":%d,"wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d},"timestamp":%d,"runId":"post-fix-030"}\n',
-    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_a), as_num(last_cpu_a), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), (os.time() * 1000)
+    '{"sessionId":"c4b0c8","hypothesisId":"%s","location":"mesen_boot_probe_nmi.lua","message":"%s","data":{"frame":%d,"cpuPc":%d,"spcPc":%d,"spcRegion":"%s","spcY":%d,"spcX":%d,"spcA":%d,"cpuA":%d,"cpuP":%d,"wram10":%d,"wram0100":%d,"nmitimen":%d,"apuio0":%d,"apuio1":%d},"timestamp":%d,"runId":"post-fix-034"}\n',
+    hid, msg, frame, as_num(last_pc), as_num(last_spc), spc_region(last_spc), as_num(last_spc_y), as_num(last_spc_x), as_num(last_spc_a), as_num(last_cpu_a), as_num(last_cpu_p), as_num(last_10), as_num(last_0100), as_num(last_4200), as_num(last_2140), as_num(last_2141), (os.time() * 1000)
   ))
   f:close()
 end

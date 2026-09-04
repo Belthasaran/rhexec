@@ -1,5 +1,9 @@
 # Changelog
 
+- **0.2.34:** Copier reached dest `$F1` (`spcY=$F1`, CPU `A=$F2`) then hung in `$FF8A`. That address is SPC CONTROL; captured `$F1=$31` clears APUIO. Skip stores to page0 `$F0–$FF`. Rebuild the SFC.
+- **0.2.33:** `$80`/`$81` toggle agreed on both sides then hung on the second byte (`cpuA=spcY=$81`). 0.2.29 already copied incrementing indices through `$FF`. Copier uses that handshake again, dest pointer + skip 0 after wrap. Rebuild the SFC.
+- **0.2.32:** Copier `$80`/`$81` still hung (`cpuA=$81`, `spcY=1`): SPC `7D` is `MOV A,X`, not `MOV A,Y`, so the toggle became 1. Use `DD`. Rebuild the SFC.
+- **0.2.31:** Copier toggle 0/1 still hung (`spcY=1`, CPU wait `A=0`): the SNES never unblocks on a `$2140` echo of 0 (same as the 0.2.29 wrap-to-0 stall). Handshake is `$80`/`$81`. Rebuild the SFC.
 - **0.2.30:** Copier at `$FF80` ran and the infinite wait held both sides, but after the first 256-byte page (`INC $01` at `$FF95`) they deadlocked (`$FF8A` / `$40:82AA`, `$7E0010` stayed 0). Bulk copy now uses a 0/1 `$2140` toggle so the handshake never wraps with dest. Rebuild the SFC.
 - **0.2.29:** Copier at `$FF80` ran (`$FF8A`) but the SNES timed wait fell through after 65536 loops, so `$4200` came up with the APU still in the copier. Copier-fed bytes spin until echo. Rebuild the SFC.
 - **0.2.28:** IPL Start is unreachable while dest high bit7 is clear (`$7F00` left the SPC at `$3CBE`). Copier is planted at `$FF80` (bit7 set) and jumped with Y+2, then copies `$0000–$FF7F`. Rebuild the SFC.

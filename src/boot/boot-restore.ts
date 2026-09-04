@@ -218,23 +218,31 @@ function emitIplStream(bytes: number[], count: number, jumpBrls?: number[], star
 }
 
 /**
- * Copier-fed bulk: $2140 is only 0/1 (X), payload index is Y.
- * Index 0..255 then wrap-to-0 deadlocked after the first page (0.2.29).
+ * Copier-fed bulk: handshake is TYA except wrap-to-0 becomes 1.
+ * 0.2.29 copied indices 1–255; hang was the $00 after $FF.
+ * Toggle $80/$81 matched one byte then hung on $81 (0.2.32).
  */
-function emitToggleStream(bytes: number[], count: number, src = 0x8000): void {
-  bytes.push(0xa0, 0x00, 0x00); // LDY #0 payload
-  bytes.push(0xa2, 0x00, 0x00); // LDX #0 toggle
+function emitSkip0Stream(bytes: number[], count: number, src = 0x8000): void {
+  bytes.push(0xa0, 0x00, 0x00); // LDY #0
   const loop = bytes.length;
   bytes.push(
-    0xb9, u8(src), u8(src >> 8), // LDA src,Y
+    0xb9, u8(src), u8(src >> 8),
     0x8f, 0x41, 0x21, 0x00, // STA $002141
-    0x8a,                   // TXA
-    0x8f, 0x40, 0x21, 0x00, // STA $002140
+    0x98,                   // TYA
   );
+  const bneNz = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE sta2140
+  bytes.push(0xc0, 0x00, 0x00); // CPY #$0000
+  const beqFirst = bytes.length;
+  bytes.push(0xf0, 0x00); // BEQ sta2140
+  bytes.push(0xa9, 0x01); // LDA #$01  wrap handshake
+  const sta2140 = bytes.length;
+  patchRel8(bytes, bneNz + 1, sta2140);
+  patchRel8(bytes, beqFirst + 1, sta2140);
+  bytes.push(0x8f, 0x40, 0x21, 0x00); // STA $002140
   emitWaitEchoAck(bytes);
   bytes.push(
-    0x8a, 0x49, 0x01, 0xaa, // TXA EOR #$01 TAX
-    0xc8,                   // INY
+    0xc8,
     0xc0, u8(count), u8(count >> 8),
   );
   const bne = bytes.length;
@@ -267,43 +275,69 @@ export function iplNextCommandKick(indexAfter: number): number {
 }
 
 export function spcHighCopier(trampAddr: number): Uint8Array {
+  // Handshake in X. Do not MOV to $F0–$FF on page 0 (CONTROL $F1 clears APUIO).
   const bytes: number[] = [
+    0xcd, 0x00,       // MOV X,#$00
     0x8f, 0x00, 0x00, // MOV $00,#$00
     0x8f, 0x00, 0x01, // MOV $01,#$00
-    0x8d, 0x00,       // MOV Y,#$00  expected $F4 toggle
   ];
   const wait = bytes.length;
-  bytes.push(0x7e, 0xf4); // CMP Y,$F4
+  bytes.push(0x3e, 0xf4); // CMP X,$F4
   const bneWait = bytes.length;
   bytes.push(0xd0, 0x00);
   patchRel8(bytes, bneWait + 1, wait);
   bytes.push(
     0xe4, 0xf5, // MOV A,$F5
-    0xcb, 0xf4, // MOV $F4,Y
-    0xc7, 0x00, // MOV [$00],A  (Y is toggle, not dest)
-    0xab, 0x00, // INC $00
+    0xd8, 0xf4, // MOV $F4,X
+    0xfd,       // MOV Y,A  data
+    0xe4, 0x01, // MOV A,$01
   );
+  const bneStore = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE store
+  bytes.push(
+    0xe4, 0x00, // MOV A,$00
+    0x68, 0xf0, // CMP A,#$F0
+  );
+  const bcsSkip = bytes.length;
+  bytes.push(0xb0, 0x00); // BCS skip (page0 MMIO)
+  const store = bytes.length;
+  patchRel8(bytes, bneStore + 1, store);
+  bytes.push(
+    0xdd,       // MOV A,Y
+    0x8d, 0x00, // MOV Y,#$00
+    0xd7, 0x00, // MOV [$00]+Y,A
+  );
+  const skip = bytes.length;
+  patchRel8(bytes, bcsSkip + 1, skip);
+  bytes.push(0xab, 0x00); // INC $00
   const bneInc = bytes.length;
   bytes.push(0xd0, 0x00);
   bytes.push(0xab, 0x01); // INC $01
   patchRel8(bytes, bneInc + 1, bytes.length);
   bytes.push(
-    0x7d,       // MOV A,Y
-    0x48, 0x01, // EOR A,#$01
-    0xfd,       // MOV Y,A
-    0xe4, 0x01, // MOV A,$01
-    0x68, 0xff, // CMP A,#$FF
+    0xe4, 0x01,
+    0x68, 0xff,
   );
   const bneHi = bytes.length;
-  bytes.push(0xd0, 0x00);
-  patchRel8(bytes, bneHi + 1, wait);
+  bytes.push(0xd0, 0x00); // BNE incx
   bytes.push(
-    0xe4, 0x00, // MOV A,$00
-    0x68, 0x80, // CMP A,#$80  stop at dest $FF80
+    0xe4, 0x00,
+    0x68, 0x80,
   );
-  const bneLo = bytes.length;
+  const beqDone = bytes.length;
+  bytes.push(0xf0, 0x00); // BEQ jmp
+  const incx = bytes.length;
+  patchRel8(bytes, bneHi + 1, incx);
+  bytes.push(0x3d); // INC X
+  const bneX = bytes.length;
   bytes.push(0xd0, 0x00);
-  patchRel8(bytes, bneLo + 1, wait);
+  patchRel8(bytes, bneX + 1, wait);
+  bytes.push(0x3d); // INC X skip handshake 0
+  const braWait = bytes.length;
+  bytes.push(0x2f, 0x00);
+  patchRel8(bytes, braWait + 1, wait);
+  const jmp = bytes.length;
+  patchRel8(bytes, beqDone + 1, jmp);
   bytes.push(0x5f, trampAddr & 0xff, (trampAddr >> 8) & 0xff);
   return Uint8Array.from(bytes);
 }
@@ -415,7 +449,7 @@ function dspPokeForState(state: RhState1, aram: Uint8Array): SpcDspPoke | null {
 
 /**
  * IPL plants the copier at $FF80 (dest bit7 set so Start can JMP), then the
- * copier copies $0000–$FF7F (0/1 $F4 toggle) and JMP $0386. Jump kick is Y+2.
+ * copier copies $0000–$FF7F (index handshake, skip page0 $F0–$FF and skip 0 after wrap) and JMP $0386. Jump kick is Y+2.
  */
 function emitSpcIplUpload(bytes: number[], aramBank: number, copierLen: number, cpuRegs?: number[]): void {
   bytes.push(0xc2, 0x10); // REP #$10
@@ -447,9 +481,9 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, copierLen: number, 
   emitIplStream(bytes, copierLen, jumpPlant, 0, SPC_COPIER_ADDR);
   emitIplKick(bytes, SPC_COPIER_ADDR, jumpKick, false, undefined, true);
   bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
-  emitToggleStream(bytes, 0x8000);
+  emitSkip0Stream(bytes, 0x8000);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  emitToggleStream(bytes, 0x7f80);
+  emitSkip0Stream(bytes, 0x7f80);
   const regs = cpuRegs ?? [0, 0, 0, 0];
   for (let i = 0; i < 4; i += 1) {
     ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);
@@ -714,7 +748,7 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
       }
       return false;
     };
-    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'A', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7f80: has([0xc0, 0x80, 0x7f]), hasCopierDestHi: has([0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]), hasLdaFf80: has([0xb9, 0x80, 0xff]), hasEchoAck: has([0xcf, 0x40, 0x21, 0x00, 0xd0]), hasToggle: has([0x8a, 0x49, 0x01, 0xaa]), hasEchoTimed: has([0xcf, 0x40, 0x21, 0x00, 0xf0]) }, timestamp: Date.now(), runId: 'post-fix-030' }) }).catch(() => {});
+    fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'A', location: 'boot-restore.ts:buildBootRestoreRom', message: 'stub assembled', data: { stubLen: stub.length, stubMax: STUB_CODE_MAX, stubBank, hasCpy8000: has([0xc0, 0x00, 0x80]), hasCpy7f80: has([0xc0, 0x80, 0x7f]), hasCopierDestHi: has([0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]), hasLdaFf80: has([0xb9, 0x80, 0xff]), hasEchoAck: has([0xcf, 0x40, 0x21, 0x00, 0xd0]), hasSkip0: has([0xa9, 0x01, 0x8f, 0x40, 0x21, 0x00]), hasEchoTimed: has([0xcf, 0x40, 0x21, 0x00, 0xf0]) }, timestamp: Date.now(), runId: 'post-fix-034' }) }).catch(() => {});
   }
   // #endregion
 
@@ -749,7 +783,7 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
     aramPayload.set(spcTramp.bytes, spcTramp.addr);
   }
   // #region agent log
-  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'E', location: 'boot-restore.ts:aramOverlay', message: 'aram overlay', data: { copierAddr: SPC_COPIER_ADDR, copierLen: copier.length, jumpKick: (copier.length + 2) & 0xff, trampAddr: spcTramp.addr, trampLen: spcTramp.bytes.length, copierHead: [aramPayload[SPC_COPIER_ADDR], aramPayload[SPC_COPIER_ADDR + 1], aramPayload[SPC_COPIER_ADDR + 2]], copierJmp: [aramPayload[SPC_COPIER_ADDR + copier.length - 3], aramPayload[SPC_COPIER_ADDR + copier.length - 2], aramPayload[SPC_COPIER_ADDR + copier.length - 1]], trampJmp: [aramPayload[spcTramp.addr + spcTramp.bytes.length - 3], aramPayload[spcTramp.addr + spcTramp.bytes.length - 2], aramPayload[spcTramp.addr + spcTramp.bytes.length - 1]] }, timestamp: Date.now(), runId: 'post-fix-030' }) }).catch(() => {});
+  fetch('http://localhost:7700/ingest/a16a51ec-9c44-41df-b5a8-3a0cdb17c431', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c4b0c8' }, body: JSON.stringify({ sessionId: 'c4b0c8', hypothesisId: 'E', location: 'boot-restore.ts:aramOverlay', message: 'aram overlay', data: { copierAddr: SPC_COPIER_ADDR, copierLen: copier.length, jumpKick: (copier.length + 2) & 0xff, trampAddr: spcTramp.addr, trampLen: spcTramp.bytes.length, hasSkipF0: copier.includes(0xf0) && [...copier].includes(0x68), copierHead: [aramPayload[SPC_COPIER_ADDR], aramPayload[SPC_COPIER_ADDR + 1], aramPayload[SPC_COPIER_ADDR + 2]], copierJmp: [aramPayload[SPC_COPIER_ADDR + copier.length - 3], aramPayload[SPC_COPIER_ADDR + copier.length - 2], aramPayload[SPC_COPIER_ADDR + copier.length - 1]], trampJmp: [aramPayload[spcTramp.addr + spcTramp.bytes.length - 3], aramPayload[spcTramp.addr + spcTramp.bytes.length - 2], aramPayload[spcTramp.addr + spcTramp.bytes.length - 1]] }, timestamp: Date.now(), runId: 'post-fix-034' }) }).catch(() => {});
   // #endregion
   payload.set(aramPayload, (WRAM_BANKS + VRAM_BANKS) * LOROM_BANK);
 
