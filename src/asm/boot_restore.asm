@@ -25,8 +25,9 @@
         sta     $4200
         ; DMA WRAM, VRAM, CGRAM, OAM. Timed SPC IPL: 32KiB from $0000, then
         ; 256-byte pages $8000–$FEFF plus $FF00–$FFBF (dest high bit7 ends a
-        ; transfer after 256 bytes). After $AA, wait timeout still jumps.
-        ; No-$AA skip jumps IPL to STOP at $FF80 ($2141=0).
+        ; transfer after 256 bytes). Jump kick is last-index+2 ($C1), not $80:
+        ; after that page IPL Y=$C0 and $80 is ignored. After $AA, wait timeout
+        ; still jumps. No-$AA skip jumps IPL to STOP at $FF80 ($2141=0).
         ; Jump to $FF80 trampoline: restore PSW/SP/$F1/$00/$01/X/Y/A, JMP aligned PC.
 ; APUIO/PPU/CPU MMIO are STA/LDA long ($00:xxxx) because DBR may not be 0.
 ; poke PPU (scrolls write-twice), $4300–$437F

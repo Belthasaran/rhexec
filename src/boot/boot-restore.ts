@@ -134,6 +134,8 @@ function packDmaRegs(state: RhState1): Uint8Array {
 
 /** After a dest-high bit7 transfer ends, IPL waits for $2140 with bit7 set. */
 const IPL_NEW_CMD = 0x80;
+/** Last byte of $FF00–$FFBF is index $BF, then IPL Y=$C0. New command needs $2140 > Y (`CMP Y,$F4` / `BPL` stay). $80 is not greater than $C0. */
+const IPL_JUMP_KICK = 0xbf + 2;
 
 /** Kick/byte echo spin. 16-bit X=0 → 65536. Optional BRL to the trampoline jump. */
 function emitWait2140(bytes: number[], value: number, jumpBrls?: number[]): void {
@@ -322,7 +324,8 @@ export function spcResumeTrampoline(state: RhState1): { addr: number; bytes: Uin
  * SPC IPL: dest $0000 streams 32KiB (IPL stops when dest high bit7 is set).
  * Dest $8000 cannot stream 32KiB — bit7 is already set, so each command is
  * one 256-byte page. After $AA, a wait timeout BRLs to the trampoline jump
- * so $4200 is still written. No-$AA skip jumps IPL to $FF80 ($2141=0).
+ * so $4200 is still written. Jump kick is $C1 (last $FF00-page index + 2).
+ * No-$AA skip jumps IPL to $FF80 ($2141=0).
  */
 function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuRegs?: number[]): void {
   const jumpBrls: number[] = [];
@@ -354,7 +357,7 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
   emitIplHighAram(bytes, jumpBrls);
   const doJump = bytes.length;
-  emitIplKick(bytes, spcPc & 0xffff, IPL_NEW_CMD, false);
+  emitIplKick(bytes, spcPc & 0xffff, IPL_JUMP_KICK, false);
   const regs = cpuRegs ?? [0, 0, 0, 0];
   for (let i = 0; i < 4; i += 1) {
     ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);

@@ -204,6 +204,7 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.ok(findSeq(stub, [0xc0, 0x00, 0x7f]) >= 0, 'high ARAM page loop CPY #$7F00');
   assert.ok(findSeq(stub, [0xc0, 0xc0, 0x7f]) >= 0, 'last page CPY #$7FC0 covers trampoline');
   assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'post-32k IPL kick has bit7 set');
+  assert.ok(findSeq(stub, [0xa9, 0xc1, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'trampoline jump kick $C1 (last index $BF + 2)');
   assert.equal(findSeq(stub, [0xa9, 0x01, 0x8f, 0x40, 0x21, 0x00]), -1, 'kick $01 does not start the high half');
   const tramp = spcResumeTrampoline(st);
   assert.equal(tramp.addr, 0xff80);
