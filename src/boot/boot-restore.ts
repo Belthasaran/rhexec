@@ -137,7 +137,14 @@ const IPL_NEW_CMD = 0x80;
 /** After each high 1-byte command IPL Y=1, so $80 is a new command. */
 const IPL_JUMP_KICK = IPL_NEW_CMD;
 
-/** Kick/byte echo spin. 16-bit X=0 → 65536. Optional BRL to the trampoline jump. */
+/** Spin until $2140 equals value. Used after the low 32KiB has proven IPL is alive. */
+function emitWait2140Ack(bytes: number[], value: number): void {
+  const loop = bytes.length;
+  bytes.push(0xaf, 0x40, 0x21, 0x00, 0xc9, u8(value));
+  const bne = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bne + 1, loop);
+}
 function emitWait2140(bytes: number[], value: number, jumpBrls?: number[]): void {
   bytes.push(0xa2, 0x00, 0x00); // LDX #0
   const loop = bytes.length;
@@ -208,16 +215,17 @@ function emitIpl32k(bytes: number[], jumpBrls?: number[]): void {
  * each command stores one byte (index 0). The first byte is the index-0 of the
  * dest $8000 transfer pre-armed before the low 32KiB ends (so the leftover
  * $2140=$FF new-command does not restart dest $0000). Then one command per
- * byte through $FFBF.
+ * byte through $FFBF. Waits until IPL acks (no timeout skip): DIR is at $8000,
+ * so aborting leaves $FF STOP in sample RAM (PC e.g. $FE27).
  */
-function emitIplHighAram(bytes: number[], jumpBrls?: number[]): void {
+function emitIplHighAram(bytes: number[]): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0
   bytes.push(
     0xb9, 0x00, 0x80,       // LDA $8000,Y
     0x8f, 0x41, 0x21, 0x00, // STA $002141
   );
   ldaSta(bytes, 0x00, 0x2140);
-  emitWait2140(bytes, 0x00, jumpBrls);
+  emitWait2140Ack(bytes, 0x00);
   bytes.push(0xc8); // INY
   const byteLoop = bytes.length;
   bytes.push(
@@ -232,13 +240,13 @@ function emitIplHighAram(bytes: number[], jumpBrls?: number[]): void {
   );
   ldaSta(bytes, 0x01, 0x2141);
   ldaSta(bytes, IPL_NEW_CMD, 0x2140);
-  emitWait2140(bytes, IPL_NEW_CMD, jumpBrls);
+  emitWait2140Ack(bytes, IPL_NEW_CMD);
   bytes.push(
     0xb9, 0x00, 0x80,       // LDA $8000,Y
     0x8f, 0x41, 0x21, 0x00, // STA $002141
   );
   ldaSta(bytes, 0x00, 0x2140);
-  emitWait2140(bytes, 0x00, jumpBrls);
+  emitWait2140Ack(bytes, 0x00);
   bytes.push(
     0xc8,                   // INY
     0xc0, 0xc0, 0x7f,       // CPY #$7FC0
@@ -341,8 +349,9 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
   ldaSta(bytes, 0x00, 0x2142);
   ldaSta(bytes, 0x80, 0x2143);
   emitIpl32k(bytes, jumpBrls);
+  ldaSta(bytes, 0x01, 0x2141); // leftover $2140=$FF must be transfer, not JMP $8000
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  emitIplHighAram(bytes, jumpBrls);
+  emitIplHighAram(bytes);
   const doJump = bytes.length;
   emitIplKick(bytes, spcPc & 0xffff, IPL_JUMP_KICK, false);
   const regs = cpuRegs ?? [0, 0, 0, 0];

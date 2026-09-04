@@ -1,5 +1,6 @@
 # Changelog
 
+- **0.2.22:** Sample DIR is at `$8000`. A timed high-half wait `BRL`'d to the trampoline and left high ARAM as `$FF` (`STOP` at e.g. `$FE27`). High 1-byte commands now wait for IPL ack with no skip. Rebuild the SFC.
 - **0.2.21:** After the low 32KiB, leftover `$2140=$FF` with IPL Y=0 is a new command back to dest `$0000`, so `$FF80` never landed (PC in unmapped `$FFDE`). Pre-arm dest `$8000` before the stream ends; trampoline moved to the `$0386` zero run in the first 32KiB. Rebuild the SFC.
 - **0.2.20:** Dest ≥ `$8000` cannot stream: IPL waits for the next index with `BPL` on dest high, so a bit7 dest stores one byte then treats later `$2140` as a new command — game APUIO JMP'd into sample RAM (`$8CF0`). High ARAM is one IPL command per byte through `$FFBF`. Rebuild the SFC.
 - **0.2.19:** After the `$FF00–$FFBF` page IPL Y is `$C0`, so a `$2140=$80` jump is ignored (`CMP Y,$F4` / `BPL`) and the APU never hits the `$FF80` trampoline (PC wanders, e.g. `$38F3`). Jump kick is last-index+2 (`$C1`). Rebuild the SFC.

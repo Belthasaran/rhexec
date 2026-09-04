@@ -25,8 +25,8 @@
         sta     $4200
         ; DMA WRAM, VRAM, CGRAM, OAM. Timed SPC IPL: 32KiB from $0000, then
         ; 1-byte IPL commands $8000–$FFBF (dest high bit7 cannot wait for the
-        ; next index). Jump kick $80 (Y=1 after a 1-byte command). After $AA,
-        ; wait timeout still jumps. No-$AA skip jumps IPL to STOP at $0386.
+        ; next index). High waits ack with no skip (DIR is at $8000). Jump kick
+        ; $80. After $AA, wait timeout still jumps. No-$AA skip to STOP at $0386.
         ; Jump to $0386 trampoline (first 32KiB, below echo): restore GPRs, JMP aligned PC.
 ; APUIO/PPU/CPU MMIO are STA/LDA long ($00:xxxx) because DBR may not be 0.
 ; poke PPU (scrolls write-twice), $4300–$437F

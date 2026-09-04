@@ -204,6 +204,7 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'pre-arm dest high $8000 before 32KiB ends');
   assert.ok(findSeq(stub, [0xc0, 0xc0, 0x7f]) >= 0, 'high ARAM 1-byte loop CPY #$7FC0');
   assert.ok(findSeq(stub, [0xa9, 0x00, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'high IPL sends index 0 each byte');
+  assert.ok(findSeq(stub, [0xaf, 0x40, 0x21, 0x00, 0xc9, 0x80, 0xd0]) >= 0, 'high kick wait is ack (no timeout skip)');
   const tramp = spcResumeTrampoline(st);
   assert.equal(tramp.addr, 0x0386);
   assert.ok(tramp.addr + tramp.bytes.length <= 0x6000, 'trampoline below echo ESA $6000');
