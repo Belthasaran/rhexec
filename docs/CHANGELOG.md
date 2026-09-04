@@ -1,5 +1,6 @@
 # Changelog
 
+- **0.2.45:** 4MB LoROM `JML $80:8000` was a FastROM mirror of bank 0, so Invictus (and any 128-bank image) ran the original reset instead of the restore stub. Pack stub+payload into unused `$00`/`$FF` banks in `$01–$7D` and JML that unique bank. Rebuild the SFC.
 - **0.2.44:** Trampoline leftover at `$0386` made `$0388≠0`, so N-SPC skipped `CALL $0BC0` and `$05A5` X=2 cleared the armed `$02` without loading the song. Restore `$0386–$0389` to 0 before JMP `$0549`. Rebuild the SFC.
 - **0.2.43:** `$1DFB←$0DDA` reached NMI (cleared by frame 212) but AMK `$00817C` then wrote 0 to `$2142` on the next vblank (`$2142==$1DFF`) before N-SPC polled port 2. Hold the song on `$2142` with `$1DFB`/`$1DFF` left 0; trampoline `MOV $06,#0` / `MOV $02,#id` so `$0BC0` reloads from the ARAM table. Rebuild the SFC.
 - **0.2.42:** Engine stayed at `$0549` (SFX worked) but `$1DFB` was 0 so NMI never re-sent the song; `$0DDA=1` is the in-level ID. Boot WRAM copies `$0DDA` into `$1DFB` when pending is 0. Rebuild the SFC.

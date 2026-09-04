@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildBootRestoreRom, holdLevelMusicPort, inidispByte, iplNextCommandKick, levelMusicId, loromOffset, nmiTimenByte, obselByte, requeueLevelMusic, spcHighCopier, spcResumeTrampoline, SPC_COPIER_ADDR } from '../src/boot/boot-restore.ts';
+import { buildBootRestoreRom, chooseBootStubPlacement, holdLevelMusicPort, inidispByte, iplNextCommandKick, levelMusicId, loromOffset, nmiTimenByte, obselByte, requeueLevelMusic, spcHighCopier, spcResumeTrampoline, SPC_COPIER_ADDR } from '../src/boot/boot-restore.ts';
 import { reconstructFillram } from '../src/players/mesen-state-map.ts';
 import { emptyCpu, makeFixtureRom, makeState } from './helpers.ts';
 import type { InternalRegs, PpuLayer, PpuState } from '../src/rhstate1/types.ts';
@@ -360,6 +360,69 @@ test('boot-restore holds song on $2142 and arms SPC $02/$06 without $1DFB', () =
   assert.ok(findSeq(tramp.bytes, [0x8f, 0x07, 0x02]) >= 0, 'trampoline MOV $02,#song');
   assert.ok(tramp.bytes.length <= 102, 'trampoline still fits $0386 zero run');
   assert.ok(findSeq(body.subarray(aramOffset + 0x0386), [0x8f, 0x07, 0x02]) >= 0, 'payload trampoline arms $02');
+});
+
+test('loromOffset FastROM $80 mirrors bank 0', () => {
+  assert.equal(loromOffset(0x80, 0x8000), loromOffset(0, 0x8000));
+});
+
+test('small LoROM still JMLs the appended unique bank', () => {
+  const rom = makeFixtureRom();
+  const place = chooseBootStubPlacement(rom);
+  assert.equal(place.inPlace, false);
+  assert.equal(place.destBank, 8);
+  const { rom: out, stubOffset } = buildBootRestoreRom(rom, makeState(new Uint8Array(0x20000)));
+  const body = bodyOf(out);
+  const dest = body[loromOffset(0, 0xff70) + 3]!;
+  assert.equal(dest, 8);
+  assert.equal(stubOffset, loromOffset(dest, 0x8000));
+  assert.notEqual(loromOffset(dest, 0x8000), loromOffset(0, 0x8000));
+});
+
+function makeFourMbLorom(paddingStart = 0x40, paddingBanks = 16): Uint8Array {
+  const rom = new Uint8Array(128 * 0x8000);
+  rom.fill(0xea);
+  rom[0x7ffc] = 0x00;
+  rom[0x7ffd] = 0x80;
+  rom[0x7fd5] = 0x30;
+  rom[0x7fd7] = 0x0c;
+  rom.fill(0xff, paddingStart * 0x8000, (paddingStart + paddingBanks) * 0x8000);
+  return rom;
+}
+
+test('4MB LoROM JML targets unused unique bank, not $80:8000', () => {
+  const rom = makeFourMbLorom();
+  const wram = new Uint8Array(0x20000);
+  wram[0x100] = 0x20;
+  wram[0x10] = 1;
+  const { rom: out, stubOffset } = buildBootRestoreRom(rom, makeState(wram, {
+    cpu: { ...emptyCpu(), pc: 0x9081d5 },
+  }));
+  const body = bodyOf(out);
+  assert.equal(body.length, rom.length);
+  const rstTramp = loromOffset(0, 0xff70);
+  assert.equal(body[rstTramp], 0x5c);
+  assert.equal(body[rstTramp + 1], 0x00);
+  assert.equal(body[rstTramp + 2], 0x80);
+  const dest = body[rstTramp + 3]!;
+  assert.notEqual(dest, 0x80);
+  assert.ok(dest >= 1 && dest < 0x7e);
+  assert.notEqual(loromOffset(dest, 0x8000), loromOffset(0, 0x8000));
+  assert.equal(stubOffset, loromOffset(dest, 0x8000));
+  assert.equal(body[stubOffset], 0x78);
+  // highest 9-bank start in $40–$4F is $47
+  assert.equal(dest, 0x47);
+});
+
+test('4MB LoROM without padding banks throws', () => {
+  const rom = new Uint8Array(128 * 0x8000);
+  rom.fill(0xea);
+  rom[0x7ffc] = 0x00;
+  rom[0x7ffd] = 0x80;
+  assert.throws(
+    () => buildBootRestoreRom(rom, makeState(new Uint8Array(0x20000))),
+    /CPU-visible/,
+  );
 });
 
 test('reconstructFillram writes packed OBSEL to $2101', () => {

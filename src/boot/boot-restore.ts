@@ -15,9 +15,67 @@ const WRAM_BANKS = 4;
 const VRAM_BANKS = 2;
 const ARAM_BANKS = 2;
 const PAYLOAD_BANKS = WRAM_BANKS + VRAM_BANKS + ARAM_BANKS;
+/** LoROM $8000–$FFFF is unique in CPU banks $00–$7D; $7E/$7F are WRAM. */
+export const LOROM_UNIQUE_BANKS = 0x7e;
+const STUB_AND_PAYLOAD_BANKS = 1 + PAYLOAD_BANKS;
 
 export function loromOffset(bank: number, addr: number): number {
   return (bank & 0x7f) * LOROM_BANK + (addr & 0x7fff);
+}
+
+/** True when a 32KiB LoROM file bank is uniform $00 or $FF padding. */
+export function loromBankIsPadding(body: Uint8Array, bank: number): boolean {
+  const off = bank * LOROM_BANK;
+  if (off + LOROM_BANK > body.length) return false;
+  const v = body[off]!;
+  if (v !== 0 && v !== 0xff) return false;
+  for (let i = 1; i < LOROM_BANK; i += 1) {
+    if (body[off + i] !== v) return false;
+  }
+  return true;
+}
+
+/** Highest start bank in $01–$7D with `need` consecutive padding banks. */
+export function findLoromPaddingRun(body: Uint8Array, need: number): number {
+  const fileBanks = Math.floor(body.length / LOROM_BANK);
+  const lastStart = Math.min(fileBanks, LOROM_UNIQUE_BANKS) - need;
+  for (let start = lastStart; start >= 1; start -= 1) {
+    let ok = true;
+    for (let i = 0; i < need; i += 1) {
+      if (!loromBankIsPadding(body, start + i)) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return start;
+  }
+  return -1;
+}
+
+export interface BootStubPlacement {
+  destBank: number;
+  stubOff: number;
+  inPlace: boolean;
+}
+
+/**
+ * JML / DMA source bank that maps to the stub's file offset.
+ * FastROM LoROM `$80:8000` mirrors bank 0, so a 4MB image cannot append at
+ * `origBanks==128`. Prefer appending when that bank is still unique ($01–$7D);
+ * otherwise pack into unused padding inside the 4MB map.
+ */
+export function chooseBootStubPlacement(body: Uint8Array): BootStubPlacement {
+  const origBanks = Math.ceil(body.length / LOROM_BANK);
+  if (origBanks >= 1 && origBanks + STUB_AND_PAYLOAD_BANKS <= LOROM_UNIQUE_BANKS) {
+    return { destBank: origBanks, stubOff: origBanks * LOROM_BANK, inPlace: false };
+  }
+  const destBank = findLoromPaddingRun(body, STUB_AND_PAYLOAD_BANKS);
+  if (destBank < 0) {
+    throw new Error(
+      `LoROM image is ${origBanks} banks; stub+payload need ${STUB_AND_PAYLOAD_BANKS} CPU-visible banks in $01–$7D (FastROM $80+ mirrors bank 0). No unused $00/$FF run found.`,
+    );
+  }
+  return { destBank, stubOff: destBank * LOROM_BANK, inPlace: true };
 }
 
 /** SNES checksum + complement at $FFDC (LoROM bank 0). */
@@ -832,8 +890,9 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   prepareSpcResume(work);
 
   const origBanks = Math.ceil(body.length / LOROM_BANK);
-  const stubBank = origBanks;
-  const payloadBank = origBanks + 1;
+  const place = chooseBootStubPlacement(body);
+  const stubBank = place.destBank;
+  const payloadBank = place.destBank + 1;
   const stub = assembleBootStub({ payloadBank, stubBank, state: work });
   if (stub.length > STUB_CODE_MAX) {
     throw new Error(`boot stub too large (${stub.length} > ${STUB_CODE_MAX})`);
@@ -873,20 +932,23 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   }
   payload.set(aramPayload, (WRAM_BANKS + VRAM_BANKS) * LOROM_BANK);
 
-  const minLen = (origBanks + 1 + PAYLOAD_BANKS) * LOROM_BANK;
-  let newLen = 0x8000;
-  while (newLen < minLen) newLen *= 2;
+  let newLen = body.length;
+  if (!place.inPlace) {
+    const minLen = (origBanks + 1 + PAYLOAD_BANKS) * LOROM_BANK;
+    newLen = 0x8000;
+    while (newLen < minLen) newLen *= 2;
+  }
   const expanded = new Uint8Array(newLen);
   expanded.set(body);
-  const stubOff = origBanks * LOROM_BANK;
-  const payloadOff = (origBanks + 1) * LOROM_BANK;
+  const stubOff = place.stubOff;
+  const payloadOff = stubOff + LOROM_BANK;
   expanded.set(stubBankBytes, stubOff);
   expanded.set(payload, payloadOff);
 
   const rst = loromOffset(0, 0xfffc);
   const rstTramp = loromOffset(0, 0xff70);
   if (rstTramp + 4 <= expanded.length) {
-    const destBank = origBanks & 0xff;
+    const destBank = place.destBank & 0xff;
     expanded[rstTramp] = 0x5c;
     expanded[rstTramp + 1] = 0x00;
     expanded[rstTramp + 2] = 0x80;
