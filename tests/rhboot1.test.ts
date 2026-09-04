@@ -19,6 +19,17 @@ function findSeq(hay: Uint8Array, needle: number[], from = 0): number {
   return -1;
 }
 
+function countSeq(hay: Uint8Array, needle: number[]): number {
+  let n = 0;
+  let from = 0;
+  while (true) {
+    const i = findSeq(hay, needle, from);
+    if (i < 0) return n;
+    n += 1;
+    from = i + 1;
+  }
+}
+
 function layer(partial: Partial<PpuLayer>): PpuLayer {
   return {
     tilemap_address: 0,
@@ -185,12 +196,20 @@ test('boot-restore embeds VRAM/CGRAM/OAM/ARAM and pokes NMI + INIDISP before JML
   assert.equal(stub[waitCmp + 6], 0xca, 'DEX after failed echo');
   assert.ok(findSeq(stub, [0xa9, 0x11, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'restore APUIO $2140 from cpu_regs');
   assert.ok(findSeq(stub, [0xa9, 0x22, 0x8f, 0x41, 0x21, 0x00]) >= 0, 'restore APUIO $2141 from cpu_regs');
-  assert.ok(findSeq(stub, [0xa9, 0x00, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'IPL dest low $2142');
-  assert.ok(findSeq(stub, [0xa9, 0x60, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'IPL jump dest high $6000 (echo trampoline)');
+  assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'IPL dest low $FF80');
+  assert.ok(findSeq(stub, [0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'IPL jump dest high $FF80 (not echo $60)');
+  assert.equal(findSeq(stub, [0xa9, 0x60, 0x8f, 0x43, 0x21, 0x00]), -1, 'DSP ESA $60 is not the jump dest');
+  assert.ok(countSeq(stub, [0xa9, 0x00, 0x8f, 0x41, 0x21, 0x00]) >= 2, 'jump kicks $2141=0 (success + no-AA STOP)');
+  assert.equal(countSeq(stub, [0xc0, 0x00, 0x80]), 1, 'only the low 32KiB streams to CPY #$8000');
+  assert.ok(findSeq(stub, [0xc0, 0x00, 0x7f]) >= 0, 'high ARAM page loop CPY #$7F00');
+  assert.ok(findSeq(stub, [0xc0, 0xc0, 0x7f]) >= 0, 'last page CPY #$7FC0 covers trampoline');
+  assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x40, 0x21, 0x00]) >= 0, 'post-32k IPL kick has bit7 set');
+  assert.equal(findSeq(stub, [0xa9, 0x01, 0x8f, 0x40, 0x21, 0x00]), -1, 'kick $01 does not start the high half');
   const tramp = spcResumeTrampoline(st);
-  assert.equal(tramp.addr, 0x6000);
+  assert.equal(tramp.addr, 0xff80);
+  assert.ok(tramp.addr + tramp.bytes.length <= 0xffc0, 'trampoline fully below IPL ROM');
   assert.equal(tramp.pc, 0x11b0);
-  assert.deepEqual([...body.subarray(aramOffset + 0x6000, aramOffset + 0x6000 + tramp.bytes.length)], [...tramp.bytes]);
+  assert.deepEqual([...body.subarray(aramOffset + 0xff80, aramOffset + 0xff80 + tramp.bytes.length)], [...tramp.bytes]);
   assert.ok(findSeq(tramp.bytes, [0x5f, 0xb0, 0x11]) >= 0, 'trampoline JMP $11B0');
 });
 
@@ -203,7 +222,31 @@ test('SPC trampoline aligns PC even when op_step is set', () => {
   const body = bodyOf(out);
   assert.ok(findSeq(body.subarray(aramOffset + tramp.addr, aramOffset + tramp.addr + tramp.bytes.length), [0x5f, 0xb0, 0x11]) >= 0);
   const stub = body.subarray(stubOffset, stubOffset + 0x600);
-  assert.ok(findSeq(stub, [0xa9, 0x60, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'jump dest is trampoline not $11B0');
+  assert.ok(findSeq(stub, [0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'jump dest is trampoline not $11B0');
+});
+
+test('SPC trampoline is $FF80 even without DSP echo', () => {
+  const wram = new Uint8Array(0x20000);
+  const aram = new Uint8Array(0x10000);
+  aram[0x11b0] = 0xf4;
+  aram[0x11b1] = 0x81;
+  const st = makeState(wram, {
+    spc: { a: 0, x: 2, y: 0x14, psw: 2, sp: 0xcd, pc: 0x11b1 },
+    sections: [
+      { id: 'wram', bus: 0x7e0000, encoding: 'raw', data: wram },
+      { id: 'spc_aram', bus: 0, encoding: 'raw', data: aram },
+    ],
+  });
+  const tramp = spcResumeTrampoline(st);
+  assert.equal(tramp.addr, 0xff80);
+  const { rom: out, aramOffset, stubOffset } = buildBootRestoreRom(makeFixtureRom(), st);
+  const body = bodyOf(out);
+  const stub = body.subarray(stubOffset, stubOffset + 0x600);
+  assert.ok(findSeq(stub, [0xa9, 0x80, 0x8f, 0x42, 0x21, 0x00]) >= 0, 'STA $2142 with $80');
+  assert.ok(findSeq(stub, [0xa9, 0xff, 0x8f, 0x43, 0x21, 0x00]) >= 0, 'STA $2143 with $FF not $60');
+  assert.deepEqual([...body.subarray(aramOffset + 0xff80, aramOffset + 0xff80 + tramp.bytes.length)], [...tramp.bytes]);
+  assert.ok(findSeq(body.subarray(aramOffset + 0xff80), [0x5f, 0xb0, 0x11]) >= 0, 'payload at $FF80 JMP $11B0');
+  assert.ok(countSeq(stub, [0xa9, 0x00, 0x8f, 0x41, 0x21, 0x00]) >= 1, 'skip-without-AA still has $2141=0 jump kick');
 });
 
 test('obselByte packs Mesen OamMode/base/offset into $2101', () => {

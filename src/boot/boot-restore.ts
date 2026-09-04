@@ -132,12 +132,12 @@ function packDmaRegs(state: RhState1): Uint8Array {
   return table;
 }
 
-/** Per-byte / kick echo spin. IPL answers in a handful of SPC cycles. */
-const IPL_WAIT_LIMIT = 0x1000;
+/** After a dest-high bit7 transfer ends, IPL waits for $2140 with bit7 set. */
+const IPL_NEW_CMD = 0x80;
 
-/** Wait until $00:2140 == value. Timeout BRL skip so a dead APU cannot freeze NMI. */
-function emitWait2140(bytes: number[], value: number, skipBrls: number[]): void {
-  bytes.push(0xa2, u8(IPL_WAIT_LIMIT), u8(IPL_WAIT_LIMIT >> 8)); // LDX #limit
+/** Kick/byte echo spin. 16-bit X=0 → 65536. Optional BRL to the trampoline jump. */
+function emitWait2140(bytes: number[], value: number, jumpBrls?: number[]): void {
+  bytes.push(0xa2, 0x00, 0x00); // LDX #0
   const loop = bytes.length;
   bytes.push(0xaf, 0x40, 0x21, 0x00, 0xc9, u8(value));
   const beq = bytes.length;
@@ -145,23 +145,44 @@ function emitWait2140(bytes: number[], value: number, skipBrls: number[]): void 
   bytes.push(0xca); // DEX
   const bne = bytes.length;
   bytes.push(0xd0, 0x00); // BNE loop
-  skipBrls.push(bytes.length + 1);
-  bytes.push(0x82, 0x00, 0x00); // BRL skip
+  if (jumpBrls) {
+    jumpBrls.push(bytes.length + 1);
+    bytes.push(0x82, 0x00, 0x00);
+  }
   const done = bytes.length;
   patchRel8(bytes, beq + 1, done);
   patchRel8(bytes, bne + 1, loop);
 }
 
-function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean, skipBrls: number[]): void {
+/** A already holds the expected $2140 echo. Clobbers X. */
+function emitWaitEcho(bytes: number[], jumpBrls?: number[]): void {
+  bytes.push(0xa2, 0x00, 0x00); // LDX #0
+  const loop = bytes.length;
+  bytes.push(0xcf, 0x40, 0x21, 0x00); // CMP $002140
+  const beq = bytes.length;
+  bytes.push(0xf0, 0x00); // BEQ done
+  bytes.push(0xca); // DEX
+  const bne = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE loop
+  if (jumpBrls) {
+    jumpBrls.push(bytes.length + 1);
+    bytes.push(0x82, 0x00, 0x00);
+  }
+  const done = bytes.length;
+  patchRel8(bytes, beq + 1, done);
+  patchRel8(bytes, bne + 1, loop);
+}
+
+function emitIplKick(bytes: number[], dest: number, kick: number, more: boolean, jumpBrls?: number[]): void {
   ldaSta(bytes, dest, 0x2142);
   ldaSta(bytes, dest >> 8, 0x2143);
   ldaSta(bytes, more ? 0x01 : 0x00, 0x2141);
   ldaSta(bytes, kick, 0x2140);
-  emitWait2140(bytes, kick, skipBrls);
+  emitWait2140(bytes, kick, jumpBrls);
 }
 
-/** One IPL block: 32KiB via 8-bit index wrap (IPL increments dest high itself). */
-function emitIpl32k(bytes: number[], skipBrls: number[]): void {
+/** Low 32KiB: dest $0000 streams until IPL INC $01 hits $80 and BPL fails. */
+function emitIpl32k(bytes: number[], jumpBrls?: number[]): void {
   bytes.push(0xa0, 0x00, 0x00); // LDY #0
   const byteLoop = bytes.length;
   bytes.push(
@@ -169,20 +190,8 @@ function emitIpl32k(bytes: number[], skipBrls: number[]): void {
     0x8f, 0x41, 0x21, 0x00, // STA $002141
     0x98,                   // TYA
     0x8f, 0x40, 0x21, 0x00, // STA $002140
-    0xa2, u8(IPL_WAIT_LIMIT), u8(IPL_WAIT_LIMIT >> 8), // LDX #limit
   );
-  const wait = bytes.length;
-  bytes.push(0xcf, 0x40, 0x21, 0x00); // CMP $002140
-  const beq = bytes.length;
-  bytes.push(0xf0, 0x00); // BEQ next
-  bytes.push(0xca); // DEX
-  const bneWait = bytes.length;
-  bytes.push(0xd0, 0x00); // BNE wait
-  skipBrls.push(bytes.length + 1);
-  bytes.push(0x82, 0x00, 0x00); // BRL skip
-  const next = bytes.length;
-  patchRel8(bytes, beq + 1, next);
-  patchRel8(bytes, bneWait + 1, wait);
+  emitWaitEcho(bytes, jumpBrls);
   bytes.push(
     0xc8,                   // INY
     0xc0, 0x00, 0x80,       // CPY #$8000
@@ -192,8 +201,74 @@ function emitIpl32k(bytes: number[], skipBrls: number[]): void {
   patchRel8(bytes, bneByte + 1, byteLoop);
 }
 
+/**
+ * High ARAM: dest high already has bit7, so each IPL command stores 256 bytes
+ * and ends (INC $01 / BPL fail). A 32KiB stream from $8000 deadlocks after one
+ * page and never reaches $4200. Last page $FF00 stops at $FFC0 so INC $01
+ * cannot wrap to $00 and keep transferring.
+ */
+function emitIplHighAram(bytes: number[], jumpBrls?: number[]): void {
+  bytes.push(0xa0, 0x00, 0x00); // LDY #0  offset in high bank
+  const pageLoop = bytes.length;
+  bytes.push(
+    0x98,                   // TYA  dest low = 0 at page start
+    0x8f, 0x42, 0x21, 0x00, // STA $002142
+    0xc2, 0x20,             // REP #$20
+    0x98,                   // TYA
+    0xe2, 0x20,             // SEP #$20  B = Y high
+    0xeb,                   // XBA
+    0x18, 0x69, 0x80,       // CLC ADC #$80  dest high
+    0x8f, 0x43, 0x21, 0x00, // STA $002143
+  );
+  ldaSta(bytes, 0x01, 0x2141);
+  ldaSta(bytes, IPL_NEW_CMD, 0x2140);
+  emitWait2140(bytes, IPL_NEW_CMD, jumpBrls);
+  const byteLoop = bytes.length;
+  bytes.push(
+    0xb9, 0x00, 0x80,       // LDA $8000,Y
+    0x8f, 0x41, 0x21, 0x00, // STA $002141
+    0x98,                   // TYA  index = Y low
+    0x8f, 0x40, 0x21, 0x00, // STA $002140
+  );
+  emitWaitEcho(bytes, jumpBrls);
+  bytes.push(
+    0xc8,                   // INY
+    0x98,                   // TYA
+  );
+  const bneByte = bytes.length;
+  bytes.push(0xd0, 0x00); // BNE byteLoop until Y low wraps
+  patchRel8(bytes, bneByte + 1, byteLoop);
+  bytes.push(0xc0, 0x00, 0x7f); // CPY #$7F00  done $8000–$FEFF
+  const bnePage = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bnePage + 1, pageLoop);
+
+  ldaSta(bytes, 0x00, 0x2142);
+  ldaSta(bytes, 0xff, 0x2143);
+  ldaSta(bytes, 0x01, 0x2141);
+  ldaSta(bytes, IPL_NEW_CMD, 0x2140);
+  emitWait2140(bytes, IPL_NEW_CMD, jumpBrls);
+  const ffLoop = bytes.length;
+  bytes.push(
+    0xb9, 0x00, 0x80,       // LDA $8000,Y
+    0x8f, 0x41, 0x21, 0x00,
+    0x98,
+    0x8f, 0x40, 0x21, 0x00,
+  );
+  emitWaitEcho(bytes, jumpBrls);
+  bytes.push(
+    0xc8,                   // INY
+    0xc0, 0xc0, 0x7f,       // CPY #$7FC0  $FF00–$FFBF (trampoline at $FF80)
+  );
+  const bneFf = bytes.length;
+  bytes.push(0xd0, 0x00);
+  patchRel8(bytes, bneFf + 1, ffLoop);
+}
+
 function patchRel8(bytes: number[], offsetByte: number, target: number): void {
-  bytes[offsetByte] = (target - (offsetByte + 1)) & 0xff;
+  const rel = target - (offsetByte + 1);
+  if (rel < -128 || rel > 127) throw new Error(`rel8 out of range (${rel})`);
+  bytes[offsetByte] = rel & 0xff;
 }
 
 function patchRel16(bytes: number[], offsetLo: number, target: number): void {
@@ -202,14 +277,11 @@ function patchRel16(bytes: number[], offsetLo: number, target: number): void {
   bytes[offsetLo + 1] = (rel >> 8) & 0xff;
 }
 
-/** Echo start when EDL>0, else just below IPL ROM. */
-export function spcTrampolineAddr(state: RhState1): number {
-  const dsp = getSectionDecoded(state, 'dsp');
-  const edl = dsp && dsp.length > 0x7d ? dsp[0x7d]! & 0x0f : 0;
-  if (edl > 0 && dsp && dsp.length > 0x6d) {
-    return (dsp[0x6d]! << 8) & 0xffff;
-  }
-  return 0xffb0;
+/** Below IPL ROM ($FFC0). Echo at ESA would overwrite a trampoline once DSP runs. */
+export const SPC_TRAMPOLINE_ADDR = 0xff80;
+
+export function spcTrampolineAddr(_state?: RhState1): number {
+  return SPC_TRAMPOLINE_ADDR;
 }
 
 /**
@@ -247,15 +319,13 @@ export function spcResumeTrampoline(state: RhState1): { addr: number; bytes: Uin
 }
 
 /**
- * SPC IPL: one transfer can stream until dest high bit7 is set (~32KiB).
- * A 64KiB transfer wraps dest and never finishes. Two 32KiB blocks is the
- * right split. Do not start a new command every 256 bytes: after Y wraps the
- * IPL increments dest high and expects index 0 of the *same* transfer, so a
- * new $2140 kick deadlocks and $4200 is never written.
- * Every $2140 wait times out to `skip` so NMI is still enabled if the APU is dead.
+ * SPC IPL: dest $0000 streams 32KiB (IPL stops when dest high bit7 is set).
+ * Dest $8000 cannot stream 32KiB — bit7 is already set, so each command is
+ * one 256-byte page. After $AA, a wait timeout BRLs to the trampoline jump
+ * so $4200 is still written. No-$AA skip jumps IPL to $FF80 ($2141=0).
  */
 function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuRegs?: number[]): void {
-  const skipBrls: number[] = [];
+  const jumpBrls: number[] = [];
   bytes.push(0xc2, 0x10); // REP #$10
   bytes.push(0x8b); // PHB — both success and skip PLB
   bytes.push(0xa0, 0x20, 0x00); // LDY #$0020 timeout outer
@@ -271,20 +341,20 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
   bytes.push(0x88); // DEY
   const bneOuter = bytes.length;
   bytes.push(0xd0, 0x00); // BNE outer
-  skipBrls.push(bytes.length + 1);
-  bytes.push(0x82, 0x00, 0x00); // BRL skip
+  const brlSkip = bytes.length;
+  bytes.push(0x82, 0x00, 0x00); // BRL skip (no $AA)
   const got = bytes.length;
   patchRel8(bytes, beqGot + 1, got);
   patchRel8(bytes, bneInner + 1, inner);
   patchRel8(bytes, bneOuter + 1, outer);
 
   bytes.push(0xa9, u8(aramBank), 0x48, 0xab);
-  emitIplKick(bytes, 0x0000, 0xcc, true, skipBrls);
-  emitIpl32k(bytes, skipBrls);
+  emitIplKick(bytes, 0x0000, 0xcc, true, jumpBrls);
+  emitIpl32k(bytes, jumpBrls);
   bytes.push(0xa9, u8(aramBank + 1), 0x48, 0xab);
-  emitIplKick(bytes, 0x8000, 0x01, true, skipBrls);
-  emitIpl32k(bytes, skipBrls);
-  emitIplKick(bytes, spcPc & 0xffff, 0x01, false, skipBrls);
+  emitIplHighAram(bytes, jumpBrls);
+  const doJump = bytes.length;
+  emitIplKick(bytes, spcPc & 0xffff, IPL_NEW_CMD, false);
   const regs = cpuRegs ?? [0, 0, 0, 0];
   for (let i = 0; i < 4; i += 1) {
     ldaSta(bytes, regs[i] ?? 0, 0x2140 + i);
@@ -293,10 +363,15 @@ function emitSpcIplUpload(bytes: number[], aramBank: number, spcPc: number, cpuR
   const braEnd = bytes.length;
   bytes.push(0x80, 0x00); // BRA end
   const skip = bytes.length;
+  // No $AA: IPL is still in BIOS. Jump ($2141=0) to $FF80 so later game APUIO
+  // cannot be treated as dest+$00 → JMP leftover RAM. Unuploaded ARAM is
+  // typically $FF (STOP); the payload plants that byte before the trampoline.
+  emitIplKick(bytes, SPC_TRAMPOLINE_ADDR, 0xcc, false);
   bytes.push(0xab); // PLB timeout
   const endIpl = bytes.length;
   bytes[braEnd + 1] = (endIpl - (braEnd + 2)) & 0xff;
-  for (const off of skipBrls) patchRel16(bytes, off, skip);
+  patchRel16(bytes, brlSkip + 1, skip);
+  for (const off of jumpBrls) patchRel16(bytes, off, doJump);
   bytes.push(0xe2, 0x10); // SEP #$10
 }
 
@@ -548,6 +623,9 @@ export function buildBootRestoreRom(original: Uint8Array, state: RhState1): Boot
   payload.set(pad(getSectionDecoded(work, 'vram'), 0x10000), WRAM_BANKS * LOROM_BANK);
   const aramPayload = pad(getSectionDecoded(work, 'spc_aram'), 0x10000);
   const spcTramp = spcResumeTrampoline(work);
+  if (spcTramp.addr < aramPayload.length) {
+    aramPayload[spcTramp.addr] = 0xff; // STOP if IPL jumps here without overlay
+  }
   if (spcTramp.addr + spcTramp.bytes.length <= aramPayload.length) {
     aramPayload.set(spcTramp.bytes, spcTramp.addr);
   }

@@ -37,6 +37,6 @@ Section `id`: `wram`, `vram`, `cgram`, `oam`, `sram`, `spc_aram`, `dsp`, `fillra
 
 ## Consumers
 
-- `rhboot1-sfc` — embed WRAM/VRAM/CGRAM/OAM/ARAM after a reset trampoline; timed IPL plus echo-RAM SPC resume trampoline; restore INIDISP and `$4200` before jumping to the captured PC
+- `rhboot1-sfc` — embed WRAM/VRAM/CGRAM/OAM/ARAM after a reset trampoline; timed IPL (32KiB then 256-byte high pages) plus `$FF80` SPC resume trampoline (no-`$AA` skip jumps IPL to STOP there); restore INIDISP and `$4200` before jumping to the captured PC
 - `rhcheat1-yml` — PAR8 WRAM lines
 - `rhlaunch1-mesen` — synthesize a throwaway Mesen `.mss` and `loadSavestate` in one `cpuExec` callback, then `emu.setState` clocks/PPU/HDMA (emulation frozen until the callback returns)

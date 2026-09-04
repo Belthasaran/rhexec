@@ -1,5 +1,7 @@
 # Changelog
 
+- **0.2.18:** High ARAM cannot be a second 32KiB IPL stream: dest `$8000` already has bit7, so the transfer ends after 256 bytes and the stub never reached `$4200` (`$7E0010` stayed 0). High half is 256-byte pages with a bit7 `$2140` kick; last page stops at `$FFC0`. After `$AA`, a wait timeout still jumps to `$FF80`. Rebuild the SFC.
+- **0.2.17:** Timed IPL skipped the trampoline jump when a byte/kick wait hit `$1000`, then game NMI wrote `$2140–$2143` while the APU was still in IPL → JMP leftover RAM (`$A300`). After `$AA`, waits spin 65536 and still jump. No-`$AA` skip plants a `$2141=0` jump to `$FF80` (STOP / trampoline, not echo `$6000`). Rebuild the SFC.
 - **0.2.16:** IPL jump no longer starts N-SPC with IPL's A/X/Y/SP and clobbered `$00/$01` (that RET'd into sample RAM and hit SLEEP at `$065E`). An echo-RAM trampoline restores CONTROL, DP, and GPRs, then `JMP`s the aligned opcode (`$11B0`, even if `op_step` is set). Rebuild the SFC.
 - **0.2.15:** Boot stub packs `$2101` from Mesen `oam_mode`/`oam_base`/`oam_address_offset` (Akogare `$03`, name base `$6000`) so sprites no longer fetch BG CHR. SPC IPL is on again: two 32KiB transfers with timed `$2140` waits that skip to `$4200` if the APU is dead, then jump to the captured SPC PC and restore `cpu_regs`. Rebuild the SFC.
 - **0.2.14:** Boot stub skipped SPC IPL: the per-byte `$2140` wait never times out, so `$4200` was never written and `$7E0010` stayed 0. Headless probe now SIGKILLs Mesen so `npm test` cannot hang after `✖`.
