@@ -1,6 +1,7 @@
 # Changelog
 
-- **0.2.46:** Invictus ARAM only has 7 zeros at `$0386`, so the 89-byte trampoline smashed the engine (SFX+music dead). Place the trampoline in a captured zero run (echo/page0/IPL excluded) and only arm N-SPC `$02`/`$06` / `$2142` when the timer-wait opcode is present. Rebuild the SFC.
+- **0.2.47:** Technique C exporters: `rhstate1-mss` (in-process Mesen `.mss`), `rhstate1-bizhawk` (2.11.1 BSNES Lua + `savestate.save` zip), `rhstate1-mercury` (balanced `retro_serialize` after a boot-restore SFC). Mutations stay on RHSTATE1 WRAM. Mercury/BizHawk files are not interchangeable.
+
 - **0.2.45:** 4MB LoROM `JML $80:8000` was a FastROM mirror of bank 0, so Invictus (and any 128-bank image) ran the original reset instead of the restore stub. Pack stub+payload into unused `$00`/`$FF` banks in `$01–$7D` and JML that unique bank. Rebuild the SFC.
 - **0.2.44:** Trampoline leftover at `$0386` made `$0388≠0`, so N-SPC skipped `CALL $0BC0` and `$05A5` X=2 cleared the armed `$02` without loading the song. Restore `$0386–$0389` to 0 before JMP `$0549`. Rebuild the SFC.
 - **0.2.43:** `$1DFB←$0DDA` reached NMI (cleared by frame 212) but AMK `$00817C` then wrote 0 to `$2142` on the next vblank (`$2142==$1DFF`) before N-SPC polled port 2. Hold the song on `$2142` with `$1DFB`/`$1DFF` left 0; trampoline `MOV $06,#0` / `MOV $02,#id` so `$0BC0` reloads from the ARAM table. Rebuild the SFC.

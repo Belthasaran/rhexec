@@ -1,6 +1,6 @@
 {
   "name": "rhexec",
-  "version": "0.2.46",
+  "version": "0.2.47",
   "private": true,
   "description": "Proof-of-concept SNES execution-state capture and playback CLIs (RHSTATE1)",
   "type": "module",
@@ -8,13 +8,19 @@
     "rhcap1-mesen": "./src/cli/rhcap1-mesen.ts",
     "rhboot1-sfc": "./src/cli/rhboot1-sfc.ts",
     "rhcheat1-yml": "./src/cli/rhcheat1-yml.ts",
-    "rhlaunch1-mesen": "./src/cli/rhlaunch1-mesen.ts"
+    "rhlaunch1-mesen": "./src/cli/rhlaunch1-mesen.ts",
+    "rhstate1-mss": "./src/cli/rhstate1-mss.ts",
+    "rhstate1-bizhawk": "./src/cli/rhstate1-bizhawk.ts",
+    "rhstate1-mercury": "./src/cli/rhstate1-mercury.ts"
   },
   "scripts": {
     "rhcap1-mesen": "node --import tsx src/cli/rhcap1-mesen.ts",
     "rhboot1-sfc": "node --import tsx src/cli/rhboot1-sfc.ts",
     "rhcheat1-yml": "node --import tsx src/cli/rhcheat1-yml.ts",
     "rhlaunch1-mesen": "node --import tsx src/cli/rhlaunch1-mesen.ts",
+    "rhstate1-mss": "node --import tsx src/cli/rhstate1-mss.ts",
+    "rhstate1-bizhawk": "node --import tsx src/cli/rhstate1-bizhawk.ts",
+    "rhstate1-mercury": "node --import tsx src/cli/rhstate1-mercury.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "help": "node --import tsx src/cli/rhcap1-mesen.ts --help"
   },

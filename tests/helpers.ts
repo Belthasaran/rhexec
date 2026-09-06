@@ -1,3 +1,6 @@
+import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Cpu5A22, RhState1 } from '../src/rhstate1/types.ts';
 import { RHSTATE1_VERSION } from '../src/rhstate1/types.ts';
 
@@ -16,6 +19,20 @@ export function makeState(wram: Uint8Array, extra?: Partial<RhState1>): RhState1
     sections: [{ id: 'wram', bus: 0x7e0000, encoding: 'raw', data: wram }],
     ...extra,
   };
+}
+
+export function runRhexecCli(
+  script: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+): { status: number | null; stdout: string; stderr: string } {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const r = spawnSync(process.execPath, ['--import', 'tsx', join(root, 'src', 'cli', script), ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+    cwd: root,
+  });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
 /** LoROM fixture large enough to contain $05D89B. */

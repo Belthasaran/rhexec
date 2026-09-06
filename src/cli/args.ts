@@ -78,8 +78,8 @@ const PLAYBACK_SPECS: FlagSpec[] = [
   { name: '--ow-y', hasValue: true },
 ];
 
-export function parsePlaybackArgs(argv: string[]): SharedPlaybackFlags {
-  const { flags } = parseArgs(argv, PLAYBACK_SPECS);
+export function parsePlaybackArgs(argv: string[], extra: FlagSpec[] = []): SharedPlaybackFlags & { extra: Record<string, string | boolean> } {
+  const { flags } = parseArgs(argv, [...PLAYBACK_SPECS, ...extra]);
   const owSubmap = flags['--ow-submap'] != null ? Number(flags['--ow-submap']) : undefined;
   const owX = flags['--ow-x'] != null ? Number(flags['--ow-x']) : undefined;
   const owY = flags['--ow-y'] != null ? Number(flags['--ow-y']) : undefined;
@@ -87,6 +87,10 @@ export function parsePlaybackArgs(argv: string[]): SharedPlaybackFlags {
   let level: number | null | undefined;
   if (typeof flags['--level'] === 'string') {
     level = parseHexInt(flags['--level'], '--level');
+  }
+  const extraFlags: Record<string, string | boolean> = {};
+  for (const f of extra) {
+    if (flags[f.name] != null) extraFlags[f.name] = flags[f.name]!;
   }
   return {
     rom: flags['--rom'] as string | undefined,
@@ -97,6 +101,7 @@ export function parsePlaybackArgs(argv: string[]): SharedPlaybackFlags {
     owX,
     owY,
     owHave,
+    extra: extraFlags,
   };
 }
 
