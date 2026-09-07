@@ -2,7 +2,7 @@
 
 All commands from `rhexec/` after `npm install`. Node 20+. `--help` on every CLI.
 
-Environment: `MESEN_PATH` (Mesen 2 binary, default `Mesen`), `MESEN_ARGS` (extra spawn args; put the headless flag here for the NMI probe), `SMW_SFC_PATH` (unheadered SMW for flips), `FLIPS_PATH` (optional; otherwise `flips` on PATH), `RHPLAY_ROOT` (optional neighbor tree for `fetchpatches.js`), `BIZHAWK_PATH` (EmuHawk / `EmuHawkMono.sh` for `rhstate1-bizhawk`), `MERCURY_CORE` (`bsnes_mercury_balanced_libretro.so` / `.dll` for `rhstate1-mercury`), `RETROARCH_PATH` (optional core search), `PYTHON` / `PYTHON3`.
+Environment: `MESEN_PATH` (Mesen 2 binary, default `Mesen`), `MESEN_ARGS` (extra spawn args; put the headless flag here for the NMI probe), `SMW_SFC_PATH` (unheadered SMW for flips), `FLIPS_PATH` (optional; otherwise `flips` on PATH), `RHPLAY_ROOT` (optional neighbor tree for `fetchpatches.js`), `BIZHAWK_PATH` (EmuHawk / `EmuHawkMono.sh` for `rhstate1-bizhawk` / `rhlaunch1-bizhawk`), `MERCURY_CORE` (`bsnes_mercury_balanced_libretro.so` / `.dll` for mercury CLIs), `RETROARCH_PATH` (`rhlaunch1-mercury`; optional core search for serialize), `PYTHON` / `PYTHON3`.
 
 `npm test` includes a live headless probe that builds `rhboot1-sfc` for Akogare 1.21 and fails if `$7E0010` stays 0. Skipped when Mesen, `SMW_SFC_PATH`, or `flips` is missing. Source SFC is fetched like `lmlevelinfo/test/get_hack.sh` (not Kaizoff; that catalog BPS is older than 1.21).
 
@@ -46,7 +46,7 @@ npm run rhcheat1-yml -- --rom <sfc> --state <rhstate1> [--out basename.yml] [--l
 
 ### rhlaunch1-mesen
 
-Technique C: launch the original ROM in Mesen and restore CPU/PPU/SPC/WRAM from `.rhstate1` in **one** `cpuExec` (`loadSavestate` of a throwaway `.mss`, ARAM overlay with canary, then `setState` for clocks/HDMA). `--out` is not accepted (use `rhboot1-sfc`).
+Technique C: launch the original ROM in Mesen and restore CPU/PPU/SPC/WRAM from `.rhstate1` in **one** `cpuExec` (`loadSavestate` of a throwaway `.mss`, ARAM overlay with canary, then `setState` for clocks/HDMA). `--out` is not accepted (use `rhboot1-sfc` or `rhstate1-mss`). Seamless analogue for other cores: [Technique D](../../devdocs/EXEC_STATE_TECHNIQUE_D_RUNTIME_RESTORE.md).
 
 ```bash
 npm run rhlaunch1-mesen -- --rom <sfc> --state <rhstate1> [--level HEX] [--ow-submap N --ow-x N --ow-y N]
@@ -63,6 +63,30 @@ npm run rhstate1-mss -- --rom <sfc> --state <rhstate1> [--out game.mss] [--level
 ```
 
 Default `--out`: ROM basename + `.mss`. Load in Mesen with File → Load State. `rhlaunch1-mesen` stays a launcher and still rejects `--out`.
+
+---
+
+### rhlaunch1-bizhawk
+
+Technique D: launch the original ROM in BizHawk 2.11.1 BSNES. Generated Lua `client.pause()`, pokes WRAM/VRAM/CGRAM/OAM/APURAM + CPU, then `client.unpause()`. Optional `--connector` `dofile`s SNI `Connector.lua` after the poke (cwd = that directory). `--out` is not accepted (use `rhstate1-bizhawk`). DMA/HDMA/PPU MMIO/DSP stay cold-boot. SNI is post-entry only.
+
+```bash
+npm run rhlaunch1-bizhawk -- --rom <sfc> --state <rhstate1> [--level HEX] [--connector Connector.lua]
+```
+
+Environment: `BIZHAWK_PATH`. Tests do not spawn EmuHawk.
+
+---
+
+### rhlaunch1-mercury
+
+Technique D: launch the **original** SFC in RetroArch mercury balanced. Offline via-core serialize prints a throwaway BST into a private `savestate_directory`; `--appendconfig` sets `savestate_auto_load`. The player never clicks Load State and never holds a boot SFC. `--out` is not accepted (use `rhstate1-mercury`). SNI/NCI cannot replace this freeze.
+
+```bash
+npm run rhlaunch1-mercury -- --rom <sfc> --state <rhstate1> [--level HEX] [--max-frames N] [--skip-verify]
+```
+
+Environment: `RETROARCH_PATH`, `MERCURY_CORE`. Tests check cfg keys + BST header without a display; live serialize skips without the core; RetroArch is never spawned by `npm test`.
 
 ---
 
@@ -86,4 +110,4 @@ Technique C: serialize **bsnes-mercury balanced** after a Technique A boot-resto
 npm run rhstate1-mercury -- --rom <sfc> --state <rhstate1> [--out game.mercury.state] [--level HEX] [--max-frames N] [--skip-verify]
 ```
 
-Environment: `MERCURY_CORE`, optional `RETROARCH_PATH`. Live tests skip without the core. RetroArch slot / `savestate_auto_load` beside the ROM is a later Electron wiring step.
+Environment: `MERCURY_CORE`, optional `RETROARCH_PATH`. Live tests skip without the core. Seamless auto-load is `rhlaunch1-mercury` ([Technique D](../../devdocs/EXEC_STATE_TECHNIQUE_D_RUNTIME_RESTORE.md)); Electron `%state` is still a follow-up.

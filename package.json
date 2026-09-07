@@ -1,6 +1,6 @@
 {
   "name": "rhexec",
-  "version": "0.2.47",
+  "version": "0.2.48",
   "private": true,
   "description": "Proof-of-concept SNES execution-state capture and playback CLIs (RHSTATE1)",
   "type": "module",
@@ -9,6 +9,8 @@
     "rhboot1-sfc": "./src/cli/rhboot1-sfc.ts",
     "rhcheat1-yml": "./src/cli/rhcheat1-yml.ts",
     "rhlaunch1-mesen": "./src/cli/rhlaunch1-mesen.ts",
+    "rhlaunch1-bizhawk": "./src/cli/rhlaunch1-bizhawk.ts",
+    "rhlaunch1-mercury": "./src/cli/rhlaunch1-mercury.ts",
     "rhstate1-mss": "./src/cli/rhstate1-mss.ts",
     "rhstate1-bizhawk": "./src/cli/rhstate1-bizhawk.ts",
     "rhstate1-mercury": "./src/cli/rhstate1-mercury.ts"
@@ -18,6 +20,8 @@
     "rhboot1-sfc": "node --import tsx src/cli/rhboot1-sfc.ts",
     "rhcheat1-yml": "node --import tsx src/cli/rhcheat1-yml.ts",
     "rhlaunch1-mesen": "node --import tsx src/cli/rhlaunch1-mesen.ts",
+    "rhlaunch1-bizhawk": "node --import tsx src/cli/rhlaunch1-bizhawk.ts",
+    "rhlaunch1-mercury": "node --import tsx src/cli/rhlaunch1-mercury.ts",
     "rhstate1-mss": "node --import tsx src/cli/rhstate1-mss.ts",
     "rhstate1-bizhawk": "node --import tsx src/cli/rhstate1-bizhawk.ts",
     "rhstate1-mercury": "node --import tsx src/cli/rhstate1-mercury.ts",

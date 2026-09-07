@@ -40,6 +40,8 @@ Section `id`: `wram`, `vram`, `cgram`, `oam`, `sram`, `spc_aram`, `dsp`, `fillra
 - `rhboot1-sfc` — embed WRAM/VRAM/CGRAM/OAM/ARAM after a reset trampoline; IPL plants a `$FF80` copier then that copies `$0000–$FF7F` (handshake tracks copier X, skip page0 `$F0–$FF` and 0 after wrap); SPC resume trampoline (prefer `$0386` when that hole fits, else a captured zero run) restores `$F8–$FC`, signals `$F4=$A5`/`$F5=$5A`, spins until the CPU overwrites `$F4`, zeros N-SPC flags `$0386–$0389`, then JMPs the N-SPC timer wait when present (`MOV Y,$FD` / BEQ) else the captured SPC PC; in-level song id (`$0DDA`) is held on `$2142` with `$1DFB`/`$1DFF` left 0 only for that N-SPC layout; SNES waits for that sentinel after PPU restore, writes `cpu_regs`, then INIDISP/`$4200`/JML. The reset trampoline JMLs a CPU-visible LoROM bank (`$01–$7D`); FastROM `$80+` mirrors bank 0, so 4MB images pack the stub into unused `$00`/`$FF` padding instead of appending at file offset 4MB.
 - `rhcheat1-yml` — PAR8 WRAM lines
 - `rhlaunch1-mesen` — synthesize a throwaway Mesen `.mss` and `loadSavestate` in one `cpuExec` callback, then `emu.setState` clocks/PPU/HDMA (emulation frozen until the callback returns)
+- `rhlaunch1-bizhawk` — original ROM; Lua pause / poke WRAM+PPU domains+CPU / unpause; optional SNI `Connector.lua` after restore
+- `rhlaunch1-mercury` — original ROM; temp mercury BST + `savestate_auto_load` (boot SFC only used offline to print the blob)
 - `rhstate1-mss` — same MSS synthesis as launch, written to disk (File → Load State)
 - `rhstate1-bizhawk` — BizHawk 2.11.1 BSNES Lua apply + `savestate.save` zip (`--load-state=`)
 - `rhstate1-mercury` — mercury balanced `retro_serialize` after a boot-restore SFC (BST1 + `balanced`; not a BizHawk zip)

@@ -1,5 +1,7 @@
 # Changelog
 
+- **0.2.48:** Seamless launch: `rhlaunch1-bizhawk` (Lua pause/poke/unpause on the original ROM; optional SNI Connector after restore) and `rhlaunch1-mercury` (temp BST + `savestate_auto_load`; original SFC). SNI/NCI is post-entry RAM only, not a freeze bus.
+
 - **0.2.47:** Technique C exporters: `rhstate1-mss` (in-process Mesen `.mss`), `rhstate1-bizhawk` (2.11.1 BSNES Lua + `savestate.save` zip), `rhstate1-mercury` (balanced `retro_serialize` after a boot-restore SFC). Mutations stay on RHSTATE1 WRAM. Mercury/BizHawk files are not interchangeable.
 
 - **0.2.45:** 4MB LoROM `JML $80:8000` was a FastROM mirror of bank 0, so Invictus (and any 128-bank image) ran the original reset instead of the restore stub. Pack stub+payload into unused `$00`/`$FF` banks in `$01–$7D` and JML that unique bank. Rebuild the SFC.

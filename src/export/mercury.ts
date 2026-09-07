@@ -1,7 +1,11 @@
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { buildBootRestoreRom } from '../boot/boot-restore.ts';
+import { assertMercuryCoreBlob } from './identify.ts';
+import type { RhState1 } from '../rhstate1/types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const LR_SERIALIZE_PY = join(here, '..', '..', 'scripts', 'lr_serialize.py');
@@ -95,4 +99,88 @@ export function runMercurySerialize(opts: {
     stdout: r.stdout || '',
     stderr: r.stderr || '',
   };
+}
+
+export function resolveRetroarchPath(): string | null {
+  const p = process.env.RETROARCH_PATH;
+  if (p && existsSync(p)) return p;
+  return null;
+}
+
+export function retroarchLooksPresent(): boolean {
+  return resolveRetroarchPath() != null;
+}
+
+export function romStateBasename(romPath: string): string {
+  return basename(romPath).replace(/\.(sfc|smc)$/i, '');
+}
+
+/** Slot-0 auto-load cfg. RetroArch loads `<savestate_directory>/<content>.state`. */
+export function mercuryAutoLoadCfg(stateDir: string): string {
+  const dir = stateDir.replace(/\\/g, '/');
+  return [
+    `savestate_directory = "${dir}"`,
+    `savestate_auto_load = "true"`,
+    `config_save_on_exit = "false"`,
+    '',
+  ].join('\n');
+}
+
+export function buildMercuryLaunchArgs(opts: { cfgPath: string; core: string; rom: string }): string[] {
+  return ['--appendconfig', opts.cfgPath, '-L', opts.core, opts.rom];
+}
+
+export function writeMercuryAutoLoadBundle(opts: {
+  dir: string;
+  romPath: string;
+  bst: Uint8Array;
+}): { cfgPath: string; statePath: string; cfg: string } {
+  mkdirSync(opts.dir, { recursive: true });
+  const statePath = join(opts.dir, `${romStateBasename(opts.romPath)}.state`);
+  writeFileSync(statePath, opts.bst);
+  const cfg = mercuryAutoLoadCfg(opts.dir);
+  const cfgPath = join(opts.dir, 'rhlaunch1-mercury.cfg');
+  writeFileSync(cfgPath, cfg);
+  return { cfgPath, statePath, cfg };
+}
+
+export function serializeRhState1ViaCore(opts: {
+  romPath: string;
+  st: RhState1;
+  out: string;
+  maxFrames?: number;
+  skipVerify?: boolean;
+}): { version: number; profile: string; stdout: string; stderr: string; bytes: number } {
+  const core = resolveMercuryCore();
+  if (!core) {
+    throw new Error('MERCURY_CORE is unset and no bsnes_mercury_balanced_libretro core was found');
+  }
+  const maxFrames = opts.maxFrames && opts.maxFrames > 0 ? opts.maxFrames : 600;
+  const original = new Uint8Array(readFileSync(opts.romPath));
+  const built = buildBootRestoreRom(original, opts.st);
+  const dir = mkdtempSync(join(tmpdir(), 'rhstate1-mercury-'));
+  const bootPath = join(dir, 'boot.sfc');
+  writeFileSync(bootPath, built.rom);
+  const gameMode = opts.st.trigger?.game_mode ?? 0x14;
+  const r = runMercurySerialize({
+    core,
+    rom: bootPath,
+    out: opts.out,
+    systemDir: dir,
+    saveDir: dir,
+    waitWramU8: { addr: 0x0100, value: gameMode },
+    maxFrames,
+    verifyRom: opts.skipVerify ? null : opts.romPath,
+    timeoutMs: Math.max(30, maxFrames) * 50 + 15_000,
+  });
+  if (r.status === 2) {
+    throw new Error((r.stderr || r.stdout || 'mercury unserialize failed').trim());
+  }
+  if (r.status !== 0) {
+    throw new Error((r.stderr || r.stdout || `lr_serialize exited ${r.status}`).trim());
+  }
+  if (!existsSync(opts.out)) throw new Error(`mercury serialize did not write ${opts.out}`);
+  const buf = readFileSync(opts.out);
+  const hdr = assertMercuryCoreBlob(buf);
+  return { ...hdr, stdout: r.stdout, stderr: r.stderr, bytes: buf.length };
 }

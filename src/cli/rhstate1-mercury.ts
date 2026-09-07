@@ -1,12 +1,7 @@
 #!/usr/bin/env -S node --import tsx
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { parsePlaybackArgs, wantHelp } from './args.ts';
-import { buildBootRestoreRom } from '../boot/boot-restore.ts';
 import { defaultOutFromRom, loadMutatedState, refuseCrossCoreOut } from '../export/playback.ts';
-import { assertMercuryCoreBlob } from '../export/identify.ts';
-import { resolveMercuryCore, runMercurySerialize } from '../export/mercury.ts';
+import { serializeRhState1ViaCore } from '../export/mercury.ts';
 
 const HELP = `rhstate1-mercury - Technique C: serialize bsnes-mercury balanced after a boot restore
 
@@ -48,40 +43,19 @@ async function main(argv: string[]): Promise<number> {
   const { rom, st } = loadMutatedState(p);
   const out = p.out || defaultOutFromRom(rom, '.mercury.state');
   refuseCrossCoreOut('mercury', out);
-  const core = resolveMercuryCore();
-  if (!core) throw new Error('MERCURY_CORE is unset and no bsnes_mercury_balanced_libretro core was found');
   const maxFramesFlag = p.extra['--max-frames'] != null ? Number(p.extra['--max-frames']) : 600;
   const maxFrames = Number.isFinite(maxFramesFlag) && maxFramesFlag > 0 ? maxFramesFlag : 600;
   const skipVerify = Boolean(p.extra['--skip-verify']);
-  const original = new Uint8Array(readFileSync(rom));
-  const built = buildBootRestoreRom(original, st);
-  const dir = mkdtempSync(join(tmpdir(), 'rhstate1-mercury-'));
-  const bootPath = join(dir, 'boot.sfc');
-  writeFileSync(bootPath, built.rom);
-  const gameMode = st.trigger?.game_mode ?? 0x14;
-  const r = runMercurySerialize({
-    core,
-    rom: bootPath,
+  const r = serializeRhState1ViaCore({
+    romPath: rom,
+    st,
     out,
-    systemDir: dir,
-    saveDir: dir,
-    waitWramU8: { addr: 0x0100, value: gameMode },
     maxFrames,
-    verifyRom: skipVerify ? null : rom,
-    timeoutMs: Math.max(30, maxFrames) * 50 + 15_000,
+    skipVerify,
   });
   if (r.stdout) process.stdout.write(r.stdout);
   if (r.stderr) process.stderr.write(r.stderr);
-  if (r.status === 2) {
-    throw new Error((r.stderr || r.stdout || 'mercury unserialize failed').trim());
-  }
-  if (r.status !== 0) {
-    throw new Error((r.stderr || r.stdout || `lr_serialize exited ${r.status}`).trim());
-  }
-  if (!existsSync(out)) throw new Error(`mercury serialize did not write ${out}`);
-  const buf = readFileSync(out);
-  const hdr = assertMercuryCoreBlob(buf);
-  process.stdout.write(`wrote ${out} (${buf.length} bytes, profile ${hdr.profile})\n`);
+  process.stdout.write(`wrote ${out} (${r.bytes} bytes, profile ${r.profile})\n`);
   return 0;
 }
 
